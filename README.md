@@ -6,9 +6,9 @@ It is a fork/rewrite of [EquiMocha](https://github.com/nxllvxxd/EquiMocha), adap
 
 ## Features
 
-- Intercepts file uploads above a **configurable size threshold** (default 9 MB, slider from 0–100 MB) and sends them to 0807.st instead
+- One **When to upload** setting: above a size limit, every file, or only from the menu
 - Works with drag & drop, paste, the attachment **+** menu, and right-click menus
-- **Dropped files always go to 0807.st**, regardless of the size threshold (configurable)
+- **Dropped files always go to 0807.st**, regardless of the size limit
 - Theme-aware floating progress card with a cancel button, anchored above the message box
 - Resumable **chunked uploads** for large files, with per-chunk retries
 - Automatic **proof-of-work** for anonymous uploads — no account needed
@@ -103,42 +103,51 @@ git -C Equicord/src/plugins/Equi0807 branch --show-current
 
 ## Settings
 
-Settings are grouped the same way in the plugin modal.
+There are only two decisions to make: **what gets uploaded**, and **how long 0807 keeps it**.
 
 ### Connection
 
 | Setting | Description |
 | --- | --- |
-| **Instance URL** | The 0807 instance to upload to. Defaults to `https://0807.st`; change it for a self-hosted instance. Validated as a URL. |
-| **Partner token** | Optional. Skips proof-of-work, raises size limits, and enables server-side URL uploads. |
+| **Instance URL** | The 0807 server to upload to. Only change this if you host your own instance. |
+| **Partner token** | Optional key from 0807 for higher limits. Most people do not need one. |
 
-### What gets uploaded
+### When to upload
+
+One setting decides what happens to files you send in Discord:
+
+| Option | Behaviour |
+| --- | --- |
+| **Files above the size limit** (default) | Attachments and pasted files over the limit go to 0807; smaller ones stay on Discord. **Dropped files are always uploaded.** |
+| **Every file** | Everything goes to 0807, any size. |
+| **Only from the right-click menu** | Nothing is intercepted automatically. Uploads only happen through *Upload to 0807*. |
 
 | Setting | Description |
 | --- | --- |
-| **Replace Discord uploads** | Send attachments to 0807.st instead of Discord. Turn off to keep Discord uploads and only use the right-click / **+** menu actions. |
-| **Always upload dropped files** | Anything dragged into the chat goes to 0807.st, regardless of the size threshold. On by default. |
-| **Upload pasted files** | Send files pasted into the chat to 0807.st. |
-| **Use size threshold** | Only upload files larger than the threshold. Turn off to upload every file, any size. |
-| **Size threshold** | Slider from 0–100 MB (default 9 MB). Drag to `0` for "any size". Disabled while the toggle above is off. |
-| **Chunked upload threshold** | Files larger than this (1–128 MB, default 32 MB) use resumable chunked uploads. Lower it if proof-of-work expires. |
+| **Size limit** | Slider, shown only for *Files above the size limit*. Default 9 MB, drag to 0 for no limit. |
+| **Chunked uploads above (MB)** | Big files are uploaded in resumable pieces from this size up. 32 MB is a good default. |
 
-### Links
+### The link you get back
 
 | Setting | Description |
 | --- | --- |
-| **Send link automatically** | Post the link in the current channel once the upload finishes. When off, the link is copied to the clipboard. |
-| **Auto-delete after** | Never, 1 hour, 1 day, 7 days, or 30 days. |
-| **Max downloads** | Delete the file after N downloads. `0` = unlimited. |
-| **File password** | Optional password required to open the uploaded file. |
-| **Copy deletion link** | Copy the `deletion_url` to the clipboard after uploading. Keep it safe — it is the only way to delete the file. |
+| **Post the link for me** | Post the link in chat after uploading. Turn off to copy it to your clipboard instead. |
+| **Copy the deletion link** | Also copy the link that deletes the file. It is the only way to remove it later. |
+
+### File retention
+
+| Setting | Description |
+| --- | --- |
+| **Delete files after** | How long 0807 keeps the file: never, 1 hour, 1 day, 7 days or 30 days. |
+| **Max downloads** | Remove the file after this many downloads. 0 means no limit. |
+| **Password** | Require this password to open the file. Leave empty for none. |
 
 ### Advanced
 
 | Setting | Description |
 | --- | --- |
-| **Disabled servers** | Comma-separated guild IDs where uploads are left to Discord. |
-| **Debug logging** | Log intercepted uploads and the decision taken to the console. |
+| **Ignore in these servers** | Comma-separated server IDs where Equi0807 stays out of the way. |
+| **Debug logging** | Log each upload and the decision taken to the console. Useful when something will not upload. |
 
 ## How it works
 
@@ -159,8 +168,8 @@ Blocked extensions configured on the instance (`exe`, `bat`, `cmd`, `com`, `scr`
 ## Troubleshooting
 
 - **Drag & drop does nothing** — enable **Debug** in the settings and watch the console: a successful interception logs `[Equi0807] dropped files […]`. If nothing is logged, another plugin is claiming the drop first (check FileUpload/EquiMocha) or the plugin is disabled/blacklisted for that server.
-- **Dropped a small file and it went to 0807.st** — expected: **Always upload dropped files** is on by default. Turn it off to make drops respect the size threshold like the attachment button does.
-- **A small file went to 0807.st instead of Discord** — check the **Size threshold** slider. It is compared with "greater than", so a file of exactly the threshold size stays on Discord, and `0` means every size is uploaded.
+- **Dropped a small file and it went to 0807.st** — expected: dropped files always upload, regardless of the size limit. Use *Only from the right-click menu* if you want drops left to Discord.
+- **A small file went to 0807.st instead of Discord** — check *When to upload* and the **Size limit** slider. A file of exactly the limit stays on Discord; `0` means every size is uploaded.
 - **The progress card sits on top of Discord's header / top bar** — this was an older build. Equi0807 no longer injects anything into Discord's React tree; the card is its own element floating above the message box. Rebuild (`pnpm build && pnpm inject`) and fully restart Discord.
 - **The plugin does not appear in the plugins list** — work through these in order:
   1. `ls Equicord/src/plugins/Equi0807` must list `index.tsx`, `native.ts`, `types.ts` and `styles.css`. If it only shows `LICENSE` and `README.md`, you cloned `main`, which does not have the plugin yet — check out the `arena/85951e3b-equi0807` branch (see Installation).

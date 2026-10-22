@@ -4,21 +4,36 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-/**
- * Files above this size (in MB) are uploaded to 0807.st instead of Discord.
- * 0 means "any size" — every file is uploaded.
- */
+/** What Equi0807 does with files sent in Discord. */
+export enum UploadMode {
+    /** Only files above the size limit are uploaded. */
+    AboveLimit = "above-limit",
+    /** Every file is uploaded, whatever its size. */
+    Everything = "everything",
+    /** Nothing is automatic; files are only uploaded from the menu. */
+    Manual = "manual"
+}
+
+export const DEFAULT_UPLOAD_MODE = UploadMode.AboveLimit;
+
+/** Default size limit in MB. */
 export const DEFAULT_THRESHOLD_MB = 9;
 
 /** Slider values, in MB. The first and last entries are also the slider bounds. */
 export const THRESHOLD_MARKERS = [0, 1, 5, 9, 10, 25, 50, 100];
 
+export function parseUploadMode(value: unknown): UploadMode {
+    return Object.values(UploadMode).includes(value as UploadMode)
+        ? value as UploadMode
+        : DEFAULT_UPLOAD_MODE;
+}
+
 /**
- * Resolves the configured threshold to bytes.
- * Returns 0 when no threshold applies, which means every file should be uploaded.
+ * Resolves the size limit to bytes.
+ * Returns 0 when no limit applies, which means every file should be uploaded.
  */
-export function computeThresholdBytes(onlyAboveThreshold: boolean, megabytes: unknown): number {
-    if (!onlyAboveThreshold) return 0;
+export function resolveThresholdBytes(mode: UploadMode, megabytes: unknown): number {
+    if (mode !== UploadMode.AboveLimit) return 0;
 
     const value = Number(megabytes);
 
@@ -27,17 +42,23 @@ export function computeThresholdBytes(onlyAboveThreshold: boolean, megabytes: un
     return value * 1024 * 1024;
 }
 
-/** Whether a file of `size` bytes should be uploaded, given a threshold in bytes. */
+/** Whether a file of `size` bytes is above the limit. 0 bytes means "no limit". */
 export function isAboveThreshold(size: number, thresholdBytes: number): boolean {
     return thresholdBytes <= 0 || size > thresholdBytes;
 }
 
 /**
  * Whether a file should be uploaded to 0807.st.
- * `ignoreThreshold` is used for drag & drop, which always uploads when enabled.
+ *
+ * Dragged files are always uploaded in both automatic modes: dropping a file
+ * is an explicit action, so the size limit does not apply to it.
  */
-export function shouldUploadFile(size: number, thresholdBytes: number, ignoreThreshold: boolean): boolean {
-    return ignoreThreshold || isAboveThreshold(size, thresholdBytes);
+export function shouldUploadFile(size: number, mode: UploadMode, thresholdBytes: number, isDrop: boolean): boolean {
+    if (mode === UploadMode.Manual) return false;
+    if (isDrop) return true;
+    if (mode === UploadMode.Everything) return true;
+
+    return isAboveThreshold(size, thresholdBytes);
 }
 
 /** Label shown next to the slider. */

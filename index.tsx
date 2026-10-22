@@ -19,7 +19,16 @@ import definePlugin, { OptionType, PluginNative } from "@utils/types";
 import { findCssClassesLazy } from "@webpack";
 import { createRoot, DraftType, FluxDispatcher, Menu, PermissionsBits, PermissionStore, React, SelectedChannelStore, SelectedGuildStore, showToast, useEffect, useState } from "@webpack/common";
 
-import { computeThresholdBytes, DEFAULT_THRESHOLD_MB, formatThreshold, shouldUploadFile, THRESHOLD_MARKERS } from "./threshold";
+import {
+    DEFAULT_THRESHOLD_MB,
+    DEFAULT_UPLOAD_MODE,
+    formatThreshold,
+    parseUploadMode,
+    resolveThresholdBytes,
+    shouldUploadFile,
+    THRESHOLD_MARKERS,
+    UploadMode
+} from "./threshold";
 import type { NativeChooseFileResult, NativeUploadProgress, NativeUploadResult, UploadOptions } from "./types";
 
 const cl = classNameFactory("vc-equi0807-");
@@ -97,7 +106,7 @@ const settings = definePluginSettings({
     baseUrl: {
         type: OptionType.STRING,
         displayName: "Instance URL",
-        description: "The 0807 instance to upload to. Change this for a self-hosted instance",
+        description: "The 0807 server to upload to. Only change this if you host your own instance.",
         default: "https://0807.st",
         placeholder: "https://0807.st",
         isValid: (value: unknown) => ENDPOINT_PATTERN.test(String(value ?? "").trim()) || "Must start with http:// or https://"
@@ -105,52 +114,39 @@ const settings = definePluginSettings({
     partnerToken: {
         type: OptionType.STRING,
         displayName: "Partner token",
-        description: "Optional. Skips proof-of-work, raises size limits and enables URL uploads",
+        description: "Optional key from 0807 for higher limits. Most people do not need one.",
         default: "",
-        placeholder: "leave empty for anonymous uploads"
+        placeholder: "leave empty to upload anonymously"
     },
 
     // ---- what gets uploaded ---------------------------------------------
-    bypassDiscordUpload: {
-        type: OptionType.BOOLEAN,
-        displayName: "Replace Discord uploads",
-        description: "Send attachments to 0807.st instead of Discord. Turn off to only use the right-click and + menu actions",
-        default: true
-    },
-    alwaysUploadDroppedFiles: {
-        type: OptionType.BOOLEAN,
-        displayName: "Always upload dropped files",
-        description: "Anything dragged into the chat goes to 0807.st, regardless of the size threshold",
-        default: true
-    },
-    autoUploadPastedFiles: {
-        type: OptionType.BOOLEAN,
-        displayName: "Upload pasted files",
-        description: "Send files pasted into the chat to 0807.st",
-        default: true
-    },
-    onlyOverNineMegabytes: {
-        type: OptionType.BOOLEAN,
-        displayName: "Use size threshold",
-        description: "Only upload files larger than the threshold below. Turn off to upload every file, any size",
-        default: true
+    uploadMode: {
+        type: OptionType.SELECT,
+        displayName: "When to upload",
+        description: "What happens to files you send in Discord. Dropped files always upload, unless you pick the menu-only option.",
+        default: DEFAULT_UPLOAD_MODE,
+        options: [
+            { label: "Files above the size limit", value: UploadMode.AboveLimit, default: true },
+            { label: "Every file", value: UploadMode.Everything },
+            { label: "Only from the right-click menu", value: UploadMode.Manual }
+        ]
     },
     uploadThresholdMB: {
         type: OptionType.SLIDER,
-        displayName: "Size threshold",
-        description: "Files larger than this go to 0807.st instead of Discord. Drag to 0 to upload any size",
+        displayName: "Size limit",
+        description: "Files bigger than this go to 0807 instead of Discord. Drag to 0 for no limit.",
         markers: THRESHOLD_MARKERS,
         default: DEFAULT_THRESHOLD_MB,
         stickToMarkers: false,
-        disabled: () => !settings.store.onlyOverNineMegabytes,
+        hidden: () => getUploadMode() !== UploadMode.AboveLimit,
         componentProps: {
             onValueRender: formatThreshold
         }
     },
     chunkedThresholdMB: {
         type: OptionType.NUMBER,
-        displayName: "Chunked upload threshold",
-        description: "Files larger than this (MB) use resumable chunked uploads. Lower it if you see proof-of-work expiring",
+        displayName: "Chunked uploads above (MB)",
+        description: "Big files are uploaded in resumable pieces from this size up. 32 MB is a good default.",
         default: 32,
         isValid: value => {
             const mb = Number(value);
@@ -160,17 +156,25 @@ const settings = definePluginSettings({
         }
     },
 
-    // ---- the links you get back ------------------------------------------
+    // ---- the link you get back -------------------------------------------
     autoSend: {
         type: OptionType.BOOLEAN,
-        displayName: "Send link automatically",
-        description: "Post the link in the current channel once the upload finishes",
+        displayName: "Post the link for me",
+        description: "Post the link in chat after uploading. Turn off to copy it to your clipboard instead.",
         default: true
     },
+    copyDeletionUrl: {
+        type: OptionType.BOOLEAN,
+        displayName: "Copy the deletion link",
+        description: "Also copy the link that deletes the file. It is the only way to remove it later.",
+        default: false
+    },
+
+    // ---- file retention ---------------------------------------------------
     shareExpiry: {
         type: OptionType.SELECT,
-        displayName: "Auto-delete after",
-        description: "How long 0807.st keeps the file",
+        displayName: "Delete files after",
+        description: "How long 0807 keeps the file.",
         default: "0",
         options: [
             { label: "Never", value: "0" },
@@ -183,7 +187,7 @@ const settings = definePluginSettings({
     maxDownloads: {
         type: OptionType.NUMBER,
         displayName: "Max downloads",
-        description: "Delete the file after this many downloads. 0 means unlimited",
+        description: "Remove the file after this many downloads. 0 means no limit.",
         default: 0,
         isValid: value => {
             const count = Number(value);
@@ -194,30 +198,24 @@ const settings = definePluginSettings({
     },
     password: {
         type: OptionType.STRING,
-        displayName: "File password",
-        description: "Optional password required to open the uploaded file",
+        displayName: "Password",
+        description: "Require this password to open the file. Leave empty for none.",
         default: "",
         placeholder: "no password"
     },
-    copyDeletionUrl: {
-        type: OptionType.BOOLEAN,
-        displayName: "Copy deletion link",
-        description: "Copy the deletion link to the clipboard after uploading. Keep it safe, it is the only way to delete the file",
-        default: false
-    },
 
-    // ---- advanced --------------------------------------------------------
+    // ---- advanced ---------------------------------------------------------
     blacklistedServers: {
         type: OptionType.STRING,
-        displayName: "Disabled servers",
-        description: "Comma-separated server IDs where uploads are left to Discord",
+        displayName: "Ignore in these servers",
+        description: "Comma-separated server IDs where Equi0807 stays out of the way.",
         default: "",
         placeholder: "123456789, 987654321"
     },
     debug: {
         type: OptionType.BOOLEAN,
         displayName: "Debug logging",
-        description: "Log intercepted uploads and their decisions to the console",
+        description: "Log each upload and the decision taken to the console. Useful when something will not upload.",
         default: false
     }
 });
@@ -469,15 +467,15 @@ function fileToInput(file: File): UploadInput {
     };
 }
 
-function getUploadThresholdBytes(): number {
-    return computeThresholdBytes(settings.store.onlyOverNineMegabytes, settings.store.uploadThresholdMB);
+function getUploadMode(): UploadMode {
+    return parseUploadMode(settings.store.uploadMode);
 }
 
-function canInterceptUploads(): boolean {
+function isInterceptionEnabled(): boolean {
     return Boolean(Native)
         && isConfigured()
-        && Boolean(settings.store.bypassDiscordUpload)
-        && !isServerBlacklisted();
+        && !isServerBlacklisted()
+        && getUploadMode() !== UploadMode.Manual;
 }
 
 type UploadSource = "drop" | "picker" | "paste" | "unknown";
@@ -498,13 +496,14 @@ function describeUploadSource(): UploadSource {
     return "unknown";
 }
 
-function shouldInterceptUploadFiles(files: readonly File[], ignoreThreshold = false): boolean {
+function shouldInterceptUploadFiles(files: readonly File[], isDrop: boolean): boolean {
     if (!files.length) return false;
-    if (!canInterceptUploads()) return false;
+    if (!isInterceptionEnabled()) return false;
 
-    const threshold = getUploadThresholdBytes();
+    const mode = getUploadMode();
+    const threshold = resolveThresholdBytes(mode, settings.store.uploadThresholdMB);
 
-    return files.some(file => shouldUploadFile(file.size, threshold, ignoreThreshold));
+    return files.some(file => shouldUploadFile(file.size, mode, threshold, isDrop));
 }
 
 function isArrayLikeFileContainer(value: unknown): value is { length: number;[index: number]: unknown; } {
@@ -789,17 +788,18 @@ function interceptUploadAddFiles(event: unknown) {
     ]));
 
     const source = describeUploadSource();
-    const alwaysDropped = Boolean(settings.store.alwaysUploadDroppedFiles);
-    const ignoreThreshold = alwaysDropped && (source === "drop" || source === "unknown");
+    // An upload with no DOM signal at all is treated as a drop, so it is never
+    // silently left to Discord.
+    const isDrop = source === "drop" || source === "unknown";
     const pending = filterUnhandled(files);
 
     debugLog("upload event", {
         source,
+        mode: getUploadMode(),
         draftType: payload.draftType,
         files: files.map(file => `${file.name} (${file.size} bytes)`),
         pending: pending.length,
-        ignoreThreshold,
-        canIntercept: canInterceptUploads()
+        enabled: isInterceptionEnabled()
     });
 
     if (!pending.length) {
@@ -818,7 +818,7 @@ function interceptUploadAddFiles(event: unknown) {
         return;
     }
 
-    if (!shouldInterceptUploadFiles(pending, ignoreThreshold)) {
+    if (!shouldInterceptUploadFiles(pending, isDrop)) {
         debugLog("skipping: below threshold or interception disabled");
         return;
     }
@@ -843,8 +843,7 @@ function handlePaste(event: ClipboardEvent) {
 
     lastPasteAt = Date.now();
 
-    if (!settings.store.autoUploadPastedFiles) return;
-    if (!shouldInterceptUploadFiles(files)) return;
+    if (!shouldInterceptUploadFiles(files, false)) return;
 
     event.preventDefault();
     event.stopPropagation();
@@ -866,7 +865,7 @@ function handleFileInputChange(event: Event) {
 
 // Dropped files always go to 0807.st, so a mere presence of files is enough.
 function shouldHandleDrop(files: readonly File[]): boolean {
-    return shouldInterceptUploadFiles(files, Boolean(settings.store.alwaysUploadDroppedFiles));
+    return shouldInterceptUploadFiles(files, true);
 }
 
 /*
@@ -896,13 +895,9 @@ function handleDragOver(event: DragEvent) {
     // progress so the FluxDispatcher interceptor can recognise dropped files.
     lastFileDragAt = Date.now();
 
-    // Sizes are not available yet while dragging, so only check the master
-    // switches when every drop is supposed to be uploaded.
-    if (settings.store.alwaysUploadDroppedFiles) {
-        if (!canInterceptUploads()) return;
-    } else if (!shouldInterceptUploadFiles(getFilesFromDataTransfer(event.dataTransfer))) {
-        return;
-    }
+    // Sizes are not available yet while dragging, so only the master switches
+    // can be checked here.
+    if (!isInterceptionEnabled()) return;
 
     if (!takeFileEvent(event)) return;
 
@@ -1265,7 +1260,6 @@ export default definePlugin({
     },
     shouldBypassDiscordUploadSizeCheck(): boolean {
         return Boolean(Native)
-            && Boolean(settings.store.bypassDiscordUpload)
             && !isServerBlacklisted();
     }
 });
