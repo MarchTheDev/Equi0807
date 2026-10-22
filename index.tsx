@@ -143,7 +143,7 @@ const settings = definePluginSettings({
             onValueRender: formatThreshold
         }
     },
-    alwaysUploadDroppedFiles: {
+    uploadEveryDroppedFile: {
         type: OptionType.BOOLEAN,
         displayName: "Always upload dropped files",
         description: "Upload dropped files even when they are under the size limit. Off means a drop works like any other upload.",
@@ -344,6 +344,18 @@ function isServerBlacklisted(): boolean {
         .map(id => id.trim())
         .filter(Boolean)
         .includes(guildId);
+}
+
+/*
+ * Older builds stored a free number for max downloads. The select expects the
+ * matching option value, so convert it once instead of showing no selection.
+ */
+function migrateStoredSettings() {
+    const storedMaxDownloads: unknown = settings.store.maxDownloads;
+
+    if (typeof storedMaxDownloads === "number") {
+        settings.store.maxDownloads = String(storedMaxDownloads);
+    }
 }
 
 /** Whether the link ends up in the clipboard at all. */
@@ -835,7 +847,7 @@ function interceptUploadAddFiles(event: unknown) {
     const source = describeUploadSource();
     // Drops follow the size limit too, unless the user asked for every drop to
     // be uploaded.
-    const ignoreThreshold = source === "drop" && Boolean(settings.store.alwaysUploadDroppedFiles);
+    const ignoreThreshold = source === "drop" && Boolean(settings.store.uploadEveryDroppedFile);
     const pending = filterUnhandled(files);
 
     debugLog("upload event", {
@@ -910,7 +922,7 @@ function handleFileInputChange(event: Event) {
 // Dropped files follow the same rules as attachments, unless every drop is
 // supposed to be uploaded.
 function shouldHandleDrop(files: readonly File[]): boolean {
-    return shouldInterceptUploadFiles(files, Boolean(settings.store.alwaysUploadDroppedFiles));
+    return shouldInterceptUploadFiles(files, Boolean(settings.store.uploadEveryDroppedFile));
 }
 
 /*
@@ -936,17 +948,11 @@ function takeFileEvent(event: Event): boolean {
 function handleDragOver(event: DragEvent) {
     if (!dataTransferHasFiles(event.dataTransfer)) return;
 
-    // Discord may handle the drag itself. Remember that a file drag is in
-    // progress so the FluxDispatcher interceptor can recognise dropped files.
+    // Only remember that a file drag is in progress so the drop can be
+    // recognised. The event itself is left untouched: Discord owns the drag
+    // and drop behaviour, and this way drops we do not want are handled by
+    // Discord exactly as if the plugin were not installed.
     lastFileDragAt = Date.now();
-
-    if (!isInterceptionEnabled()) return;
-
-    // Keep the browser willing to fire a drop, but do not swallow the event:
-    // Discord still needs it for drops we decide to leave alone.
-    event.preventDefault();
-
-    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
 }
 
 function handleDrop(event: DragEvent) {
@@ -971,7 +977,17 @@ function handleDrop(event: DragEvent) {
         return;
     }
 
-    if (!shouldHandleDrop(pending)) return;
+    const shouldUpload = shouldHandleDrop(pending);
+
+    debugLog("drop decision", {
+        mode: getUploadMode(),
+        thresholdMB: settings.store.uploadThresholdMB,
+        alwaysUploadDropped: Boolean(settings.store.uploadEveryDroppedFile),
+        files: pending.map(file => `${file.name} (${file.size} bytes)`),
+        willUpload: shouldUpload
+    });
+
+    if (!shouldUpload) return;
     if (!takeFileEvent(event)) return;
 
     markFilesHandled(pending);
@@ -1245,6 +1261,7 @@ export default definePlugin({
     start() {
         if (uploadAddFilesInterceptor) return;
 
+        migrateStoredSettings();
         mountProgressOverlay();
 
         uploadAddFilesInterceptor = event => interceptUploadAddFiles(event);

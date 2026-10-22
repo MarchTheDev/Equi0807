@@ -169,6 +169,7 @@ Blocked extensions configured on the instance (`exe`, `bat`, `cmd`, `com`, `scr`
 
 - **Drag & drop does nothing**: enable **Debug logging** in the settings and watch the console. A successful interception logs `[Equi0807] upload event`. If nothing is logged, the plugin is disabled or blacklisted for that server.
 - **A small dropped file stays on Discord**: expected, drops follow the size limit. Turn on **Always upload dropped files** if you want every drop uploaded.
+- **Dragging a small file still uploads it**: turn off **Always upload dropped files**. While it is on, drops ignore the size limit entirely.
 - **A small file went to 0807.st instead of Discord**: check *When to upload* and the **Size limit** slider. A file of exactly the limit stays on Discord; `0` means every size is uploaded.
 - **The progress card sits on top of Discord's header or top bar**: this was an older build. Equi0807 no longer injects anything into Discord's React tree; the card is its own element floating above the message box. Rebuild (`pnpm build && pnpm inject`) and fully restart Discord.
 - **The plugin does not appear in the plugins list**: work through these in order:
