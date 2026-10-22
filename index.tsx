@@ -16,7 +16,8 @@ import { copyToClipboard } from "@utils/clipboard";
 import { classNameFactory } from "@utils/css";
 import { sendMessage } from "@utils/discord";
 import definePlugin, { OptionType, PluginNative } from "@utils/types";
-import { DraftType, FluxDispatcher, Menu, PermissionsBits, PermissionStore, React, SelectedChannelStore, SelectedGuildStore, showToast, useEffect, useState } from "@webpack/common";
+import { findCssClassesLazy } from "@webpack";
+import { createRoot, DraftType, FluxDispatcher, Menu, PermissionsBits, PermissionStore, React, SelectedChannelStore, SelectedGuildStore, showToast, useEffect, useState } from "@webpack/common";
 
 import type { NativeChooseFileResult, NativeUploadProgress, NativeUploadResult, UploadOptions } from "./types";
 
@@ -756,7 +757,30 @@ const channelAttachMenuPatch: NavContextMenuPatchCallback = (children, props) =>
 /*                                progress bar                                */
 /* -------------------------------------------------------------------------- */
 
-const ProgressBarInner = () => {
+const ChatInputClasses = findCssClassesLazy("channelTextArea", "buttonContainer");
+
+function getChatInputRect(): DOMRect | null {
+    const candidates: (HTMLElement | null)[] = [];
+
+    try {
+        const { channelTextArea } = ChatInputClasses as { channelTextArea?: string; };
+        if (channelTextArea) candidates.push(document.querySelector<HTMLElement>(`.${CSS.escape(channelTextArea)}`));
+    } catch { }
+
+    candidates.push(
+        document.querySelector<HTMLElement>('[class*="channelTextArea"]'),
+        document.querySelector<HTMLElement>('[role="textbox"][contenteditable="true"]')
+    );
+
+    for (const element of candidates) {
+        const rect = element?.getBoundingClientRect();
+        if (rect && rect.width > 120 && rect.height > 0) return rect;
+    }
+
+    return null;
+}
+
+const ProgressCard = () => {
     const [state, setState] = useState(getUploadState);
 
     useEffect(() => subscribeUploadState(() => setState(getUploadState())), []);
@@ -800,7 +824,87 @@ const ProgressBarInner = () => {
     );
 };
 
-const ProgressBar = ErrorBoundary.wrap(ProgressBarInner, { noop: true });
+const ProgressCardSafe = ErrorBoundary.wrap(ProgressCard, { noop: true });
+
+// The card lives in its own React root attached to <body> and is positioned
+// above the message box, so Discord's layout (and its top bar) is never touched.
+const ProgressOverlay = () => {
+    const [state, setState] = useState(getUploadState);
+    const [position, setPosition] = useState<{ left: number; width: number; bottom: number; } | null>(null);
+
+    useEffect(() => subscribeUploadState(() => setState(getUploadState())), []);
+
+    const visible = state.phase !== "idle";
+
+    useEffect(() => {
+        if (!visible) return;
+
+        const update = () => {
+            const rect = getChatInputRect();
+            const width = Math.min(rect?.width ?? 720, window.innerWidth - 40);
+
+            if (rect) {
+                setPosition({
+                    left: rect.left + (rect.width - width) / 2,
+                    width,
+                    bottom: Math.max(8, window.innerHeight - rect.top + 8)
+                });
+            } else {
+                setPosition({
+                    left: Math.max(20, (window.innerWidth - width) / 2),
+                    width,
+                    bottom: 96
+                });
+            }
+        };
+
+        update();
+
+        window.addEventListener("resize", update);
+        const timer = setInterval(update, 1000);
+
+        return () => {
+            window.removeEventListener("resize", update);
+            clearInterval(timer);
+        };
+    }, [visible]);
+
+    if (!visible || !position) return null;
+
+    return (
+        <div
+            className={cl("progress-overlay")}
+            style={{
+                left: position.left,
+                width: position.width,
+                bottom: position.bottom
+            }}
+        >
+            <ProgressCardSafe />
+        </div>
+    );
+};
+
+let progressRoot: ReturnType<typeof createRoot> | null = null;
+let progressMountNode: HTMLDivElement | null = null;
+
+function mountProgressOverlay() {
+    if (progressRoot) return;
+
+    progressMountNode ??= document.createElement("div");
+    if (!progressMountNode.isConnected) document.body.appendChild(progressMountNode);
+
+    progressRoot = createRoot(progressMountNode);
+    progressRoot.render(<ProgressOverlay />);
+}
+
+function unmountProgressOverlay() {
+    progressRoot?.unmount();
+    progressRoot = null;
+
+    progressMountNode?.remove();
+    progressMountNode = null;
+}
 
 /* -------------------------------------------------------------------------- */
 /*                                   plugin                                   */
@@ -813,13 +917,6 @@ export default definePlugin({
     authors: [{ name: "Equi0807", id: 0n }],
     settings,
     patches: [
-        {
-            find: ".CREATE_FORUM_POST||",
-            replacement: {
-                match: /(textValue:.{0,50}channelId:\i\.id\})\)(?:,\i(,))?/,
-                replace: "$1,$self.renderUploadProgress()$2"
-            }
-        },
         // Forces an early return on the file size limit nitro upsell modal.
         {
             find: "#{intl::UPLOAD_AREA_TOO_LARGE_HELP_PREMIUM_TIER_1}",
@@ -837,6 +934,8 @@ export default definePlugin({
     start() {
         if (uploadAddFilesInterceptor) return;
 
+        mountProgressOverlay();
+
         uploadAddFilesInterceptor = event => interceptUploadAddFiles(event);
         FluxDispatcher.addInterceptor(uploadAddFilesInterceptor);
 
@@ -849,6 +948,8 @@ export default definePlugin({
         document.addEventListener("drop", dropEventListener, true);
     },
     stop() {
+        unmountProgressOverlay();
+
         if (!uploadAddFilesInterceptor) return;
 
         const index = FluxDispatcher._interceptors.indexOf(uploadAddFilesInterceptor);
@@ -876,8 +977,5 @@ export default definePlugin({
             && Boolean(settings.store.bypassDiscordUpload)
             && !isServerBlacklisted()
             && !isAnotherUploaderEnabled();
-    },
-    renderUploadProgress() {
-        return <ProgressBar />;
     }
 });

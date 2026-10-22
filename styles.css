@@ -1,12 +1,35 @@
+.vc-equi0807-progress-overlay {
+    position: fixed;
+    z-index: 1000;
+    pointer-events: none;
+    display: flex;
+    justify-content: center;
+}
+
 .vc-equi0807-progress-wrap {
-    margin-top: 8px;
-    border-radius: 8px;
+    pointer-events: auto;
+    width: 100%;
+    border-radius: 10px;
     border: 1px solid var(--border-subtle);
-    padding: 8px 10px;
-    background: var(--background-secondary);
+    padding: 10px 12px;
+    background: var(--background-floating, var(--background-secondary));
+    box-shadow: var(--elevation-high, 0 8px 16px rgb(0 0 0 / 24%));
     display: flex;
     flex-direction: column;
     gap: 6px;
+    animation: vc-equi0807-slide-in 140ms ease-out;
+}
+
+@keyframes vc-equi0807-slide-in {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 .vc-equi0807-progress-head {

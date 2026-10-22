@@ -8,7 +8,7 @@ It is a fork/rewrite of [EquiMocha](https://github.com/nxllvxxd/EquiMocha), adap
 
 - Intercepts file uploads over 9 MB (Discord's free limit) and sends them to 0807.st instead
 - Works with drag & drop, paste, the attachment **+** menu, and right-click menus
-- Live progress + cancel button inside the chat
+- Floating progress card with a cancel button, anchored above the message box
 - Resumable **chunked uploads** for large files, with per-chunk retries
 - Automatic **proof-of-work** for anonymous uploads — no account needed
 - Optional **partner token**: skips proof-of-work, raises limits, and enables server-side URL uploads
@@ -134,6 +134,7 @@ Blocked extensions configured on the instance (`exe`, `bat`, `cmd`, `com`, `scr`
 
 ## Troubleshooting
 
+- **The progress card sits on top of Discord's header / top bar** — this was an older build. Equi0807 no longer injects anything into Discord's React tree; the card is its own element floating above the message box. Rebuild (`pnpm build && pnpm inject`) and fully restart Discord.
 - **The plugin does not appear in the plugins list** — work through these in order:
   1. `ls Equicord/src/plugins/Equi0807` must list `index.tsx`, `native.ts`, `types.ts` and `styles.css`. If it only shows `LICENSE` and `README.md`, you cloned `main`, which does not have the plugin yet — check out the `arena/85951e3b-equi0807` branch (see Installation).
   2. Re-run `pnpm build` and watch for errors. A failed build leaves the previous `dist/` in place, so Discord keeps loading the old plugins.
