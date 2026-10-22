@@ -36,70 +36,22 @@ Made by **TheMarch88** (`511186459588427795`).
 
    You **have to clone** the repo (it needs its `.git` directory to build).
 
-2. Clone this repo into the plugins folder:
+2. Clone this repo into the userplugins folder:
 
    ```sh
-   cd Equicord/src/plugins
+   cd Equicord/src/userplugins
    git clone https://github.com/MarchTheDev/Equi0807
    ```
 
-   > If a plain clone gives you only `LICENSE` and `README.md`, the plugin has not been merged into `main` yet. Re-clone on the branch instead:
-   >
-   > ```sh
-   > rm -rf Equi0807
-   > git clone -b arena/85951e3b-equi0807 https://github.com/MarchTheDev/Equi0807
-   > ```
-   >
-   > Already cloned it?
-   >
-   > ```sh
-   > git -C Equi0807 fetch origin arena/85951e3b-equi0807
-   > git -C Equi0807 checkout -B arena/85951e3b-equi0807 origin/arena/85951e3b-equi0807
-   > ```
-
-   **Check that the files are really there before building:**
-
-   ```sh
-   ls Equi0807
-   # must list: index.tsx  native.ts  types.ts  threshold.ts  links.ts  uploader.ts  styles.css
-   ```
-
-   If you downloaded a ZIP instead of cloning, make sure `index.tsx` sits directly inside `Equicord/src/plugins/Equi0807/` and not in a nested folder.
-
-3. Install pnpm if you do not have it (`npm i -g pnpm` or `corepack enable`), then from the Equicord root install and build:
-
-   ```sh
-   pnpm install --frozen-lockfile
-   pnpm build
-   pnpm inject
-   ```
-
-   `pnpm build` must finish without errors. If it prints `Could not resolve "./plugins/Equi0807"`, the plugin folder is missing `index.tsx`, see step 2.
-
-4. **Fully quit Discord** (tray icon, then Quit, not just closing the window) and relaunch it. Open **Settings → Plugins**, search for `0807`, and enable **Equi0807**.
-
-   You can confirm the build picked it up with:
-
-   ```sh
-   grep -c Equi0807 dist/desktop/renderer.js
-   ```
-
-   A result of `0` means the plugin was not compiled in.
+3. **Fully quit Discord** (tray icon, then Quit, not just closing the window) and relaunch it. Open **Settings → Plugins**, search for `0807`, and enable **Equi0807**.
 
 ## Updating
 
 ```sh
-cd Equicord/src/plugins/Equi0807
+cd Equicord/src/userplugins/Equi0807
 git pull
 cd ../../..
 pnpm build
-pnpm inject
-```
-
-If `git pull` reports "already up to date" but nothing changed, check you are on the right branch:
-
-```sh
-git -C Equicord/src/plugins/Equi0807 branch --show-current
 ```
 
 ## Settings
@@ -133,7 +85,6 @@ One setting decides what happens to files you send in Discord:
 | --- | --- |
 | **What to do with the link** | **Send it in chat**, **Paste it in the chat box** (without sending, so you can edit it first), or **Copy it to the clipboard**. |
 | **Also copy the link** | Copy it to the clipboard as well when it was sent or pasted. Off by default, so sending or pasting does not touch your clipboard. |
-| **Include the deletion link** | Add the deletion link on the next line when the link is copied. It is the only way to delete the file later. Shown only when the link is going to be copied. |
 
 ### File retention
 
@@ -169,16 +120,8 @@ Blocked extensions configured on the instance (`exe`, `bat`, `cmd`, `com`, `scr`
 
 - **Drag & drop does nothing**: enable **Debug logging** in the settings and watch the console. A successful interception logs `[Equi0807] upload event`. If nothing is logged, the plugin is disabled or blacklisted for that server.
 - **A small dropped file stays on Discord**: expected, drops follow the size limit. Turn on **Always upload dropped files** if you want every drop uploaded.
-- **Dragging a small file still uploads it**: turn off **Always upload dropped files**. While it is on, drops ignore the size limit entirely.
 - **A small file went to 0807.st instead of Discord**: check *When to upload* and the **Size limit** slider. A file of exactly the limit stays on Discord; `0` means every size is uploaded.
 - **The progress card sits on top of Discord's header or top bar**: this was an older build. Equi0807 no longer injects anything into Discord's React tree; the card is its own element floating above the message box. Rebuild (`pnpm build && pnpm inject`) and fully restart Discord.
-- **The plugin does not appear in the plugins list**: work through these in order:
-  1. `ls Equicord/src/plugins/Equi0807` must list `index.tsx`, `native.ts`, `types.ts`, `threshold.ts`, `links.ts`, `uploader.ts` and `styles.css`. If it only shows `LICENSE` and `README.md`, you cloned `main`, which does not have the plugin yet. Check out the `arena/85951e3b-equi0807` branch (see Installation).
-  2. Re-run `pnpm build` and watch for errors. A failed build leaves the previous `dist/` in place, so Discord keeps loading the old plugins.
-  3. Run `pnpm inject` from the **same** Equicord checkout you built. If you have several clones, it is easy to build one and inject another.
-  4. Confirm the build contains it: `grep -c Equi0807 dist/desktop/renderer.js` should not be `0`.
-  5. Fully quit Discord (tray, then Quit) and relaunch. Closing the window is not enough.
-  6. This plugin needs a source build (`git clone` + `pnpm build` + `pnpm inject`). If Equicord was installed through the installer/GUI, files added to `src/plugins` are never loaded.
 - **"Equi0807 requires the Discord desktop app"**: uploads cannot be done from a browser because 0807.st does not allow cross-origin requests. Use the desktop app.
 - **`Invalid partner token`**: check the token in the settings, or clear it to upload anonymously.
 - **`Too many uploads` / HTTP 429**: wait a few minutes before retrying.
