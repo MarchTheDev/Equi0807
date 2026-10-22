@@ -6,15 +6,16 @@ It is a fork/rewrite of [EquiMocha](https://github.com/nxllvxxd/EquiMocha), adap
 
 ## Features
 
-- One **When to upload** setting: above a size limit, every file, or only from the menu
+- One **When to upload** setting: above a size limit, every file, or only from the **+** menu
 - Works with drag & drop, paste, the attachment **+** menu, and right-click menus
 - **Dropped files always go to 0807.st**, regardless of the size limit
 - Theme-aware floating progress card with a cancel button, anchored above the message box
 - Resumable **chunked uploads** for large files, with per-chunk retries
-- Automatic **proof-of-work** for anonymous uploads — no account needed
+- Automatic **proof-of-work** for anonymous uploads, no account needed
 - Optional **partner token**: skips proof-of-work, raises limits, and enables server-side URL uploads
-- Optional expiry, max downloads, and password protection
-- Optional deletion-link copying (keep it somewhere safe!)
+- Optional expiry and max downloads
+- Choose what happens to the link: send it in chat, paste it in the chat box without sending, or copy it
+- Optional deletion link, copied next to the file link
 - Works with self-hosted 0807 instances
 - Per-server blacklist
 
@@ -60,7 +61,7 @@ Made by **TheMarch88** (`511186459588427795`).
 
    ```sh
    ls Equi0807
-   # must list: index.tsx  native.ts  types.ts  styles.css  LICENSE  README.md
+   # must list: index.tsx  native.ts  types.ts  threshold.ts  links.ts  uploader.ts  styles.css
    ```
 
    If you downloaded a ZIP instead of cloning, make sure `index.tsx` sits directly inside `Equicord/src/plugins/Equi0807/` and not in a nested folder.
@@ -73,9 +74,9 @@ Made by **TheMarch88** (`511186459588427795`).
    pnpm inject
    ```
 
-   `pnpm build` must finish without errors. If it prints `Could not resolve "./plugins/Equi0807"`, the plugin folder is missing `index.tsx` — see step 2.
+   `pnpm build` must finish without errors. If it prints `Could not resolve "./plugins/Equi0807"`, the plugin folder is missing `index.tsx`, see step 2.
 
-4. **Fully quit Discord** (tray icon → Quit, not just closing the window) and relaunch it. Open **Settings → Plugins**, search for `0807`, and enable **Equi0807**.
+4. **Fully quit Discord** (tray icon, then Quit, not just closing the window) and relaunch it. Open **Settings → Plugins**, search for `0807`, and enable **Equi0807**.
 
    You can confirm the build picked it up with:
 
@@ -103,8 +104,6 @@ git -C Equicord/src/plugins/Equi0807 branch --show-current
 
 ## Settings
 
-There are only two decisions to make: **what gets uploaded**, and **how long 0807 keeps it**.
-
 ### Connection
 
 | Setting | Description |
@@ -120,7 +119,7 @@ One setting decides what happens to files you send in Discord:
 | --- | --- |
 | **Files above the size limit** (default) | Attachments and pasted files over the limit go to 0807; smaller ones stay on Discord. **Dropped files are always uploaded.** |
 | **Every file** | Everything goes to 0807, any size. |
-| **Only from the right-click menu** | Nothing is intercepted automatically. Uploads only happen through *Upload to 0807*. |
+| **Only from the + menu** | Nothing is intercepted automatically. Uploads only happen through **Upload to 0807** in the **+** menu or a right-click menu. |
 
 | Setting | Description |
 | --- | --- |
@@ -131,16 +130,16 @@ One setting decides what happens to files you send in Discord:
 
 | Setting | Description |
 | --- | --- |
-| **Post the link for me** | Post the link in chat after uploading. Turn off to copy it to your clipboard instead. |
-| **Copy the deletion link** | Also copy the link that deletes the file. It is the only way to remove it later. |
+| **What to do with the link** | **Send it in chat**, **Paste it in the chat box** (without sending, so you can edit it first), or **Copy it to the clipboard**. |
+| **Also copy the link** | Copy it to the clipboard as well when it was sent or pasted. Off by default, so sending or pasting does not touch your clipboard. |
+| **Include the deletion link** | Add the deletion link on the next line when the link is copied. It is the only way to delete the file later. Shown only when the link is going to be copied. |
 
 ### File retention
 
 | Setting | Description |
 | --- | --- |
 | **Delete files after** | How long 0807 keeps the file: never, 1 hour, 1 day, 7 days or 30 days. |
-| **Max downloads** | Remove the file after this many downloads. 0 means no limit. |
-| **Password** | Require this password to open the file. Leave empty for none. |
+| **Max downloads** | Remove the file after a number of downloads: infinite, 1, 5 or 25. |
 
 ### Advanced
 
@@ -161,29 +160,29 @@ Files up to the chunked threshold are sent as a single multipart `POST /upload`.
 
 The simple POST limit is 2 GB; chunked uploads go up to 10 GB anonymously. Partner limits are higher (50 GB per file, 100 GB for burn-after-read). 0807 also enforces a rate limit of 60 uploads per 10 minutes for anonymous users.
 
-> **Note on proof-of-work lifetime:** an anonymous proof is only valid for a short time (about 2–4 minutes). That is why larger files use the chunked flow, where the proof is validated immediately by `/upload/init`. If you see `pow_expired`, lower the chunked threshold.
+> **Note on proof-of-work lifetime:** an anonymous proof is only valid for a short time (about 2 to 4 minutes). That is why larger files use the chunked flow, where the proof is validated immediately by `/upload/init`. If you see `pow_expired`, lower the chunked threshold.
 
 Blocked extensions configured on the instance (`exe`, `bat`, `cmd`, `com`, `scr`, `msi`, `vbs`, `ps1`, `sh`, `jar` by default) are rejected by the server.
 
 ## Troubleshooting
 
-- **Drag & drop does nothing** — enable **Debug** in the settings and watch the console: a successful interception logs `[Equi0807] dropped files […]`. If nothing is logged, another plugin is claiming the drop first (check FileUpload/EquiMocha) or the plugin is disabled/blacklisted for that server.
-- **Dropped a small file and it went to 0807.st** — expected: dropped files always upload, regardless of the size limit. Use *Only from the right-click menu* if you want drops left to Discord.
-- **A small file went to 0807.st instead of Discord** — check *When to upload* and the **Size limit** slider. A file of exactly the limit stays on Discord; `0` means every size is uploaded.
-- **The progress card sits on top of Discord's header / top bar** — this was an older build. Equi0807 no longer injects anything into Discord's React tree; the card is its own element floating above the message box. Rebuild (`pnpm build && pnpm inject`) and fully restart Discord.
-- **The plugin does not appear in the plugins list** — work through these in order:
-  1. `ls Equicord/src/plugins/Equi0807` must list `index.tsx`, `native.ts`, `types.ts` and `styles.css`. If it only shows `LICENSE` and `README.md`, you cloned `main`, which does not have the plugin yet — check out the `arena/85951e3b-equi0807` branch (see Installation).
+- **Drag & drop does nothing**: enable **Debug logging** in the settings and watch the console. A successful interception logs `[Equi0807] upload event`. If nothing is logged, another plugin is claiming the drop first (check FileUpload/EquiMocha) or the plugin is disabled or blacklisted for that server.
+- **Dropped a small file and it went to 0807.st**: expected. Dropped files always upload, regardless of the size limit. Use *Only from the + menu* if you want drops left to Discord.
+- **A small file went to 0807.st instead of Discord**: check *When to upload* and the **Size limit** slider. A file of exactly the limit stays on Discord; `0` means every size is uploaded.
+- **The progress card sits on top of Discord's header or top bar**: this was an older build. Equi0807 no longer injects anything into Discord's React tree; the card is its own element floating above the message box. Rebuild (`pnpm build && pnpm inject`) and fully restart Discord.
+- **The plugin does not appear in the plugins list**: work through these in order:
+  1. `ls Equicord/src/plugins/Equi0807` must list `index.tsx`, `native.ts`, `types.ts`, `threshold.ts`, `links.ts`, `uploader.ts` and `styles.css`. If it only shows `LICENSE` and `README.md`, you cloned `main`, which does not have the plugin yet. Check out the `arena/85951e3b-equi0807` branch (see Installation).
   2. Re-run `pnpm build` and watch for errors. A failed build leaves the previous `dist/` in place, so Discord keeps loading the old plugins.
   3. Run `pnpm inject` from the **same** Equicord checkout you built. If you have several clones, it is easy to build one and inject another.
   4. Confirm the build contains it: `grep -c Equi0807 dist/desktop/renderer.js` should not be `0`.
-  5. Fully quit Discord (tray → Quit) and relaunch. Closing the window is not enough.
+  5. Fully quit Discord (tray, then Quit) and relaunch. Closing the window is not enough.
   6. This plugin needs a source build (`git clone` + `pnpm build` + `pnpm inject`). If Equicord was installed through the installer/GUI, files added to `src/plugins` are never loaded.
-- **"Equi0807 requires the Discord desktop app"** — uploads cannot be done from a browser because 0807.st does not allow cross-origin requests. Use the desktop app.
-- **`Invalid partner token`** — check the token in the settings, or clear it to upload anonymously.
-- **`Too many uploads` / HTTP 429** — wait a few minutes before retrying.
-- **`Storage is full` / HTTP 507** — the instance has run out of space; try again later or use another instance.
-- **Uploads stop at 0%** — check the `Debug` setting and the console for the underlying error.
-- **I also use EquiMocha or Equicord's FileUpload plugin** — enable only one uploader at a time. When either one is enabled, Equi0807 disables its own interception to avoid duplicate uploads; its context-menu actions still work.
+- **"Equi0807 requires the Discord desktop app"**: uploads cannot be done from a browser because 0807.st does not allow cross-origin requests. Use the desktop app.
+- **`Invalid partner token`**: check the token in the settings, or clear it to upload anonymously.
+- **`Too many uploads` / HTTP 429**: wait a few minutes before retrying.
+- **`Storage is full` / HTTP 507**: the instance has run out of space; try again later or use another instance.
+- **Uploads stop at 0%**: check the **Debug logging** setting and the console for the underlying error.
+- **"Equi0807: EquiMocha is also enabled" but it is not**: this warning only appears when the other plugin is installed and enabled in Equicord. Check **Settings → Plugins** for EquiMocha or FileUpload and disable it there. A plugin that was uninstalled no longer triggers the warning.
 
 ## Privacy
 
@@ -191,9 +190,9 @@ Files are uploaded directly from your computer to your configured 0807 instance.
 
 ## Credits
 
-- [EquiMocha](https://github.com/nxllvxxd/EquiMocha) by nxllvxxd — the original plugin this is based on
-- [Equicord's FileUpload plugin](https://github.com/Equicord/Equicord/tree/main/src/equicordplugins/fileUpload) — upload UI, progress bar, and Discord integration patterns
-- [0807](https://codeberg.org/Sauul/0807) by Sauul — the open-source file host behind 0807.st
+- [EquiMocha](https://github.com/nxllvxxd/EquiMocha) by nxllvxxd, the original plugin this is based on
+- [Equicord's FileUpload plugin](https://github.com/Equicord/Equicord/tree/main/src/equicordplugins/fileUpload), for the upload UI, progress bar, and Discord integration patterns
+- [0807](https://codeberg.org/Sauul/0807) by Sauul, the open-source file host behind 0807.st
 
 ## License
 

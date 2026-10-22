@@ -22,7 +22,6 @@ export interface UploadOptions {
     expiry: string;
     /** Self-destruct after this many downloads. 0 = unlimited. */
     maxDownloads: string;
-    password: string;
     partnerToken: string;
     /** Optional custom link (partner tokens only). */
     vanity: string;

@@ -450,7 +450,6 @@ function buildOptionalFields(options: UploadOptions): Record<string, string> {
         maxdl: options.maxDownloads
     };
 
-    if (options.password) fields.password = options.password;
     if (options.vanity) fields.vanity = options.vanity;
 
     return fields;
@@ -663,7 +662,6 @@ async function uploadChunked(
         maxdl: options.maxDownloads
     };
 
-    if (options.password) finishBody.password = options.password;
     if (options.vanity) finishBody.vanity = options.vanity;
 
     const finishResponse = await apiFetch(options, "/upload/finish", {
@@ -983,7 +981,6 @@ async function remoteUpload(
         maxdl: options.maxDownloads
     };
 
-    if (options.password) body.password = options.password;
     if (options.vanity) body.vanity = options.vanity;
 
     setProgress(key, {

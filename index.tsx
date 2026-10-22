@@ -8,17 +8,18 @@
 import "./styles.css";
 
 import { findGroupChildrenByChildId, NavContextMenuPatchCallback } from "@api/ContextMenu";
-import { isPluginEnabled } from "@api/PluginManager";
+import { isPluginEnabled, plugins } from "@api/PluginManager";
 import { definePluginSettings } from "@api/Settings";
 import ErrorBoundary from "@components/ErrorBoundary";
 import { OpenExternalIcon } from "@components/Icons";
 import { copyToClipboard } from "@utils/clipboard";
 import { classNameFactory } from "@utils/css";
-import { sendMessage } from "@utils/discord";
+import { insertTextIntoChatInputBox, sendMessage } from "@utils/discord";
 import definePlugin, { OptionType, PluginNative } from "@utils/types";
 import { findCssClassesLazy } from "@webpack";
-import { createRoot, DraftType, FluxDispatcher, Menu, PermissionsBits, PermissionStore, React, SelectedChannelStore, SelectedGuildStore, showToast, useEffect, useState } from "@webpack/common";
+import { ChannelStore, createRoot, DraftType, FluxDispatcher, Menu, PermissionsBits, PermissionStore, React, SelectedChannelStore, SelectedGuildStore, showToast, useEffect, useState } from "@webpack/common";
 
+import { buildClipboardText, LinkAction, parseLinkAction, planLinkDelivery, shouldIncludeDeletion } from "./links";
 import {
     DEFAULT_THRESHOLD_MB,
     DEFAULT_UPLOAD_MODE,
@@ -30,6 +31,7 @@ import {
     UploadMode
 } from "./threshold";
 import type { NativeChooseFileResult, NativeUploadProgress, NativeUploadResult, UploadOptions } from "./types";
+import { findEnabledUploader } from "./uploader";
 
 const cl = classNameFactory("vc-equi0807-");
 const SERVICE_LABEL = "0807.st";
@@ -123,12 +125,12 @@ const settings = definePluginSettings({
     uploadMode: {
         type: OptionType.SELECT,
         displayName: "When to upload",
-        description: "What happens to files you send in Discord. Dropped files always upload, unless you pick the menu-only option.",
+        description: "What happens to files you send in Discord. Dropped files always upload unless you pick the + menu option.",
         default: DEFAULT_UPLOAD_MODE,
         options: [
             { label: "Files above the size limit", value: UploadMode.AboveLimit, default: true },
             { label: "Every file", value: UploadMode.Everything },
-            { label: "Only from the right-click menu", value: UploadMode.Manual }
+            { label: "Only from the + menu", value: UploadMode.Manual }
         ]
     },
     uploadThresholdMB: {
@@ -157,17 +159,30 @@ const settings = definePluginSettings({
     },
 
     // ---- the link you get back -------------------------------------------
-    autoSend: {
+    linkAction: {
+        type: OptionType.SELECT,
+        displayName: "What to do with the link",
+        description: "Send the link in chat, paste it in the chat box without sending, or copy it.",
+        default: "send",
+        options: [
+            { label: "Send it in chat", value: "send", default: true },
+            { label: "Paste it in the chat box", value: "paste" },
+            { label: "Copy it to the clipboard", value: "copy" }
+        ]
+    },
+    alsoCopyLink: {
         type: OptionType.BOOLEAN,
-        displayName: "Post the link for me",
-        description: "Post the link in chat after uploading. Turn off to copy it to your clipboard instead.",
-        default: true
+        displayName: "Also copy the link",
+        description: "Copy it to the clipboard as well, even though it was sent or pasted.",
+        default: false,
+        hidden: () => parseLinkAction(settings.store.linkAction) === "copy"
     },
     copyDeletionUrl: {
         type: OptionType.BOOLEAN,
-        displayName: "Copy the deletion link",
-        description: "Also copy the link that deletes the file. It is the only way to remove it later.",
-        default: false
+        displayName: "Include the deletion link",
+        description: "Add the deletion link on the next line when the link is copied. It is the only way to delete the file later.",
+        default: false,
+        hidden: () => !isCopyingLink()
     },
 
     // ---- file retention ---------------------------------------------------
@@ -185,23 +200,16 @@ const settings = definePluginSettings({
         ]
     },
     maxDownloads: {
-        type: OptionType.NUMBER,
+        type: OptionType.SELECT,
         displayName: "Max downloads",
-        description: "Remove the file after this many downloads. 0 means no limit.",
-        default: 0,
-        isValid: value => {
-            const count = Number(value);
-            if (!Number.isFinite(count) || count < 0) return "Must be 0 or a positive number";
-
-            return true;
-        }
-    },
-    password: {
-        type: OptionType.STRING,
-        displayName: "Password",
-        description: "Require this password to open the file. Leave empty for none.",
-        default: "",
-        placeholder: "no password"
+        description: "Remove the file after this many downloads.",
+        default: "0",
+        options: [
+            { label: "Infinite", value: "0", default: true },
+            { label: "1 download", value: "1" },
+            { label: "5 downloads", value: "5" },
+            { label: "25 downloads", value: "25" }
+        ]
     },
 
     // ---- advanced ---------------------------------------------------------
@@ -335,11 +343,18 @@ function isServerBlacklisted(): boolean {
 
 function getOtherUploader(): string | null {
     try {
-        if (isPluginEnabled("EquiMocha")) return "EquiMocha";
-        if (isPluginEnabled("FileUpload")) return "FileUpload";
-    } catch { }
+        return findEnabledUploader({
+            isInstalled: id => Boolean(plugins[id]),
+            isEnabled: id => isPluginEnabled(id)
+        });
+    } catch {
+        return null;
+    }
+}
 
-    return null;
+/** Whether the link ends up in the clipboard at all. */
+function isCopyingLink(): boolean {
+    return parseLinkAction(settings.store.linkAction) === "copy" || Boolean(settings.store.alsoCopyLink);
 }
 
 let warnedAboutConflict = false;
@@ -371,8 +386,7 @@ function getUploadOptions(): UploadOptions {
     return {
         baseUrl: (settings.store.baseUrl ?? "").trim() || "https://0807.st",
         expiry: String(settings.store.shareExpiry ?? "0"),
-        maxDownloads: String(Math.max(0, Math.trunc(settings.store.maxDownloads) || 0)),
-        password: settings.store.password ?? "",
+        maxDownloads: String(Math.max(0, Math.trunc(Number(settings.store.maxDownloads)) || 0)),
         partnerToken: (settings.store.partnerToken ?? "").trim(),
         vanity: "",
         chunkedThresholdBytes: chunkedMB * 1024 * 1024,
@@ -577,29 +591,77 @@ function stopFileEvent(event: Event) {
 /*                               upload helpers                               */
 /* -------------------------------------------------------------------------- */
 
-async function notifyUploadSuccess(url: string, copyOnly: boolean, channelId: string | undefined, deletionUrl?: string) {
-    try {
-        if (!copyOnly && settings.store.autoSend && channelId) {
-            await sendMessage(channelId, { content: url });
-            showToast({ text: "Uploaded to 0807.st", variant: "success" });
+/*
+ * Copies the file link, with the deletion link on the next line when the user
+ * asked for it. Both go into one clipboard entry so neither one is lost.
+ */
+async function copyLinks(url: string, deletionUrl?: string): Promise<boolean> {
+    const includeDeletion = shouldIncludeDeletion(Boolean(settings.store.copyDeletionUrl), deletionUrl);
 
-            if (settings.store.copyDeletionUrl && deletionUrl) {
-                await copyToClipboard(deletionUrl);
-                showToast({ text: "Deletion link copied to clipboard. Keep it safe!", variant: "success" });
-            }
+    await copyToClipboard(buildClipboardText(url, deletionUrl, includeDeletion));
+
+    return includeDeletion;
+}
+
+function showCopiedToast(includeDeletion: boolean) {
+    showToast({
+        text: includeDeletion ? "Link and deletion link copied to clipboard" : "Link copied to clipboard",
+        variant: "success"
+    });
+}
+
+function canWriteIn(channelId: string | undefined): boolean {
+    if (!channelId) return false;
+
+    const channel = ChannelStore.getChannel(channelId);
+    if (!channel) return false;
+
+    // Direct messages have no guild permissions to check.
+    if (!channel.guild_id) return true;
+
+    return PermissionStore.can(PermissionsBits.SEND_MESSAGES, channel);
+}
+
+async function notifyUploadSuccess(url: string, copyOnly: boolean, channelId: string | undefined, deletionUrl?: string, prefix = "") {
+    const action: LinkAction = parseLinkAction(settings.store.linkAction);
+    const canWrite = canWriteIn(channelId);
+    const canPasteHere = Boolean(channelId) && channelId === SelectedChannelStore.getChannelId() && canWrite;
+    const delivery = planLinkDelivery(action, Boolean(channelId) && canWrite, canPasteHere, copyOnly);
+
+    if (delivery === "copy") {
+        showCopiedToast(await copyLinks(url, deletionUrl));
+        return;
+    }
+
+    const sendInChat = delivery === "send";
+
+    try {
+        if (sendInChat) {
+            await sendMessage(channelId!, { content: url });
+            showToast({ text: "Link sent in chat", variant: "success" });
         } else {
-            await copyToClipboard(url);
-            showToast({ text: "Upload complete — link copied to clipboard", variant: "success" });
+            insertTextIntoChatInputBox(`${prefix}${url}`);
+            showToast({ text: "Link pasted in the chat box", variant: "success" });
         }
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
 
         try {
-            await copyToClipboard(url);
-            showToast({ text: `Uploaded, but could not send the link (${message}). It was copied to your clipboard.`, variant: "critical" });
+            const includeDeletion = await copyLinks(url, deletionUrl);
+            showToast({
+                text: `Could not ${sendInChat ? "send" : "paste"} the link (${message}). ${includeDeletion ? "Link and deletion link copied." : "Link copied."}`,
+                variant: "critical"
+            });
         } catch {
             showToast({ text: `Uploaded, but could not share the link: ${message}`, variant: "critical" });
         }
+
+        return;
+    }
+
+    // Sending or pasting does not touch the clipboard unless asked to.
+    if (settings.store.alsoCopyLink) {
+        await copyLinks(url, deletionUrl).catch(() => { });
     }
 }
 
@@ -712,7 +774,7 @@ async function uploadInputs(inputs: UploadInput[], copyOnly = false): Promise<vo
                 canCancel: false
             });
 
-            await notifyUploadSuccess(result.url, copyOnly, channelId, result.deletionUrl);
+            await notifyUploadSuccess(result.url, copyOnly, channelId, result.deletionUrl, index > 0 ? "\n" : "");
         }
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
