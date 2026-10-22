@@ -19,11 +19,11 @@ import definePlugin, { OptionType, PluginNative } from "@utils/types";
 import { findCssClassesLazy } from "@webpack";
 import { createRoot, DraftType, FluxDispatcher, Menu, PermissionsBits, PermissionStore, React, SelectedChannelStore, SelectedGuildStore, showToast, useEffect, useState } from "@webpack/common";
 
+import { computeThresholdBytes, DEFAULT_THRESHOLD_MB, formatThreshold, isAboveThreshold, THRESHOLD_MARKERS } from "./threshold";
 import type { NativeChooseFileResult, NativeUploadProgress, NativeUploadResult, UploadOptions } from "./types";
 
 const cl = classNameFactory("vc-equi0807-");
 const SERVICE_LABEL = "0807.st";
-const DISCORD_FREE_LIMIT = 9 * 1024 * 1024;
 const STAGING_CHUNK_BYTES = 8 * 1024 * 1024;
 
 const Native = IS_DISCORD_DESKTOP
@@ -88,8 +88,21 @@ const settings = definePluginSettings({
     },
     onlyOverNineMegabytes: {
         type: OptionType.BOOLEAN,
-        description: "Only intercept files larger than 9 MB (Discord's free upload limit)",
+        displayName: "Only upload above the size threshold",
+        description: "When off, every file is uploaded to 0807.st, no matter how small",
         default: true
+    },
+    uploadThresholdMB: {
+        type: OptionType.SLIDER,
+        displayName: "Size threshold",
+        description: "Files larger than this are uploaded to 0807.st instead of Discord. Drag to 0 to upload any size",
+        markers: THRESHOLD_MARKERS,
+        default: DEFAULT_THRESHOLD_MB,
+        stickToMarkers: false,
+        disabled: () => !settings.store.onlyOverNineMegabytes,
+        componentProps: {
+            onValueRender: formatThreshold
+        }
     },
     chunkedThresholdMB: {
         type: OptionType.NUMBER,
@@ -339,6 +352,10 @@ function fileToInput(file: File): UploadInput {
     };
 }
 
+function getUploadThresholdBytes(): number {
+    return computeThresholdBytes(settings.store.onlyOverNineMegabytes, settings.store.uploadThresholdMB);
+}
+
 function shouldInterceptUploadFiles(files: readonly File[]): boolean {
     if (!Native || !isConfigured()) return false;
     if (!settings.store.bypassDiscordUpload) return false;
@@ -346,9 +363,10 @@ function shouldInterceptUploadFiles(files: readonly File[]): boolean {
     if (isAnotherUploaderEnabled()) return false;
     if (!files.length) return false;
 
-    if (!settings.store.onlyOverNineMegabytes) return true;
+    const threshold = getUploadThresholdBytes();
 
-    return files.some(file => file.size > DISCORD_FREE_LIMIT);
+    // 0 = no threshold: every size goes to 0807.st
+    return files.some(file => isAboveThreshold(file.size, threshold));
 }
 
 function isArrayLikeFileContainer(value: unknown): value is { length: number;[index: number]: unknown; } {
