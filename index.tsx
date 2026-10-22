@@ -8,7 +8,6 @@
 import "./styles.css";
 
 import { findGroupChildrenByChildId, NavContextMenuPatchCallback } from "@api/ContextMenu";
-import { isPluginEnabled, plugins } from "@api/PluginManager";
 import { definePluginSettings } from "@api/Settings";
 import ErrorBoundary from "@components/ErrorBoundary";
 import { OpenExternalIcon } from "@components/Icons";
@@ -31,7 +30,6 @@ import {
     UploadMode
 } from "./threshold";
 import type { NativeChooseFileResult, NativeUploadProgress, NativeUploadResult, UploadOptions } from "./types";
-import { findEnabledUploader } from "./uploader";
 
 const cl = classNameFactory("vc-equi0807-");
 const SERVICE_LABEL = "0807.st";
@@ -144,6 +142,13 @@ const settings = definePluginSettings({
         componentProps: {
             onValueRender: formatThreshold
         }
+    },
+    alwaysUploadDroppedFiles: {
+        type: OptionType.BOOLEAN,
+        displayName: "Always upload dropped files",
+        description: "Upload dropped files even when they are under the size limit. Off means a drop works like any other upload.",
+        default: false,
+        hidden: () => getUploadMode() !== UploadMode.AboveLimit
     },
     chunkedThresholdMB: {
         type: OptionType.NUMBER,
@@ -341,35 +346,9 @@ function isServerBlacklisted(): boolean {
         .includes(guildId);
 }
 
-function getOtherUploader(): string | null {
-    try {
-        return findEnabledUploader({
-            isInstalled: id => Boolean(plugins[id]),
-            isEnabled: id => isPluginEnabled(id)
-        });
-    } catch {
-        return null;
-    }
-}
-
 /** Whether the link ends up in the clipboard at all. */
 function isCopyingLink(): boolean {
     return parseLinkAction(settings.store.linkAction) === "copy" || Boolean(settings.store.alsoCopyLink);
-}
-
-let warnedAboutConflict = false;
-
-function warnAboutUploaderConflict() {
-    if (warnedAboutConflict) return;
-
-    const other = getOtherUploader();
-    if (!other) return;
-
-    warnedAboutConflict = true;
-    showToast({
-        text: `Equi0807: ${other} is also enabled. Disable one of them if uploads go to the wrong place.`,
-        variant: "critical"
-    });
 }
 
 function isUploadCancelledError(error: unknown): boolean {
@@ -495,29 +474,33 @@ function isInterceptionEnabled(): boolean {
 type UploadSource = "drop" | "picker" | "paste" | "unknown";
 
 /*
- * Works out what caused an upload action. This must not depend on our own DOM
- * listeners firing: Discord may stop propagation before they run, in which
- * case an upload looks "unknown" and is treated like a drop (when dots are
- * configured to always upload), instead of silently falling back to Discord.
+ * Works out what caused an upload action. Only a real drag counts as a drop:
+ * an upload with no signal of its own is treated like an attachment, so the
+ * size limit is honoured instead of uploading everything by accident.
  */
 function describeUploadSource(): UploadSource {
     const now = Date.now();
+    const dragAge = now - lastFileDragAt;
+    const pickerAge = now - lastPickerAt;
+    const pasteAge = now - lastPasteAt;
 
-    if (now - lastFileDragAt < DROP_GRACE_MS) return "drop";
-    if (now - lastPickerAt < INPUT_GRACE_MS) return "picker";
-    if (now - lastPasteAt < INPUT_GRACE_MS) return "paste";
+    // A picker or paste event is a stronger signal than a drag that merely
+    // passed over the window, so the most recent one wins.
+    if (pickerAge < INPUT_GRACE_MS && pickerAge <= dragAge) return "picker";
+    if (pasteAge < INPUT_GRACE_MS && pasteAge <= dragAge) return "paste";
+    if (dragAge < DROP_GRACE_MS) return "drop";
 
     return "unknown";
 }
 
-function shouldInterceptUploadFiles(files: readonly File[], isDrop: boolean): boolean {
+function shouldInterceptUploadFiles(files: readonly File[], ignoreThreshold: boolean): boolean {
     if (!files.length) return false;
     if (!isInterceptionEnabled()) return false;
 
     const mode = getUploadMode();
     const threshold = resolveThresholdBytes(mode, settings.store.uploadThresholdMB);
 
-    return files.some(file => shouldUploadFile(file.size, mode, threshold, isDrop));
+    return files.some(file => shouldUploadFile(file.size, mode, threshold, ignoreThreshold));
 }
 
 function isArrayLikeFileContainer(value: unknown): value is { length: number;[index: number]: unknown; } {
@@ -850,9 +833,9 @@ function interceptUploadAddFiles(event: unknown) {
     ]));
 
     const source = describeUploadSource();
-    // An upload with no DOM signal at all is treated as a drop, so it is never
-    // silently left to Discord.
-    const isDrop = source === "drop" || source === "unknown";
+    // Drops follow the size limit too, unless the user asked for every drop to
+    // be uploaded.
+    const ignoreThreshold = source === "drop" && Boolean(settings.store.alwaysUploadDroppedFiles);
     const pending = filterUnhandled(files);
 
     debugLog("upload event", {
@@ -861,6 +844,7 @@ function interceptUploadAddFiles(event: unknown) {
         draftType: payload.draftType,
         files: files.map(file => `${file.name} (${file.size} bytes)`),
         pending: pending.length,
+        ignoreThreshold,
         enabled: isInterceptionEnabled()
     });
 
@@ -880,7 +864,7 @@ function interceptUploadAddFiles(event: unknown) {
         return;
     }
 
-    if (!shouldInterceptUploadFiles(pending, isDrop)) {
+    if (!shouldInterceptUploadFiles(pending, ignoreThreshold)) {
         debugLog("skipping: below threshold or interception disabled");
         return;
     }
@@ -890,8 +874,6 @@ function interceptUploadAddFiles(event: unknown) {
     payload.files = [];
     payload.uploads = [];
     payload.items = [];
-
-    warnAboutUploaderConflict();
 
     void uploadInputs(pending.map(fileToInput));
 }
@@ -925,9 +907,10 @@ function handleFileInputChange(event: Event) {
     }
 }
 
-// Dropped files always go to 0807.st, so a mere presence of files is enough.
+// Dropped files follow the same rules as attachments, unless every drop is
+// supposed to be uploaded.
 function shouldHandleDrop(files: readonly File[]): boolean {
-    return shouldInterceptUploadFiles(files, true);
+    return shouldInterceptUploadFiles(files, Boolean(settings.store.alwaysUploadDroppedFiles));
 }
 
 /*
@@ -957,13 +940,11 @@ function handleDragOver(event: DragEvent) {
     // progress so the FluxDispatcher interceptor can recognise dropped files.
     lastFileDragAt = Date.now();
 
-    // Sizes are not available yet while dragging, so only the master switches
-    // can be checked here.
     if (!isInterceptionEnabled()) return;
 
-    if (!takeFileEvent(event)) return;
-
-    stopFileEvent(event);
+    // Keep the browser willing to fire a drop, but do not swallow the event:
+    // Discord still needs it for drops we decide to leave alone.
+    event.preventDefault();
 
     if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
 }
@@ -996,8 +977,6 @@ function handleDrop(event: DragEvent) {
     markFilesHandled(pending);
 
     stopFileEvent(event);
-
-    warnAboutUploaderConflict();
 
     debugLog("dropped files", pending.map(file => `${file.name} (${file.size} bytes)`));
 
@@ -1286,6 +1265,7 @@ export default definePlugin({
 
         // tells picker uploads apart from dropped ones
         fileInputChangeEventListener = event => handleFileInputChange(event);
+        window.addEventListener("change", fileInputChangeEventListener, true);
         document.addEventListener("change", fileInputChangeEventListener, true);
     },
     stop() {
@@ -1316,6 +1296,7 @@ export default definePlugin({
         }
 
         if (fileInputChangeEventListener) {
+            window.removeEventListener("change", fileInputChangeEventListener, true);
             document.removeEventListener("change", fileInputChangeEventListener, true);
             fileInputChangeEventListener = null;
         }

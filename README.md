@@ -8,7 +8,7 @@ It is a fork/rewrite of [EquiMocha](https://github.com/nxllvxxd/EquiMocha), adap
 
 - One **When to upload** setting: above a size limit, every file, or only from the **+** menu
 - Works with drag & drop, paste, the attachment **+** menu, and right-click menus
-- **Dropped files always go to 0807.st**, regardless of the size limit
+- Dropped files follow the same size limit as attachments, or always upload if you turn that on
 - Theme-aware floating progress card with a cancel button, anchored above the message box
 - Resumable **chunked uploads** for large files, with per-chunk retries
 - Automatic **proof-of-work** for anonymous uploads, no account needed
@@ -117,12 +117,13 @@ One setting decides what happens to files you send in Discord:
 
 | Option | Behaviour |
 | --- | --- |
-| **Files above the size limit** (default) | Attachments and pasted files over the limit go to 0807; smaller ones stay on Discord. **Dropped files are always uploaded.** |
+| **Files above the size limit** (default) | Anything over the limit goes to 0807: attachments, pasted files and dropped files. Smaller ones stay on Discord. |
 | **Every file** | Everything goes to 0807, any size. |
 | **Only from the + menu** | Nothing is intercepted automatically. Uploads only happen through **Upload to 0807** in the **+** menu or a right-click menu. |
 
 | Setting | Description |
 | --- | --- |
+| **Always upload dropped files** | Upload dropped files even when they are under the size limit. Off means a drop works like any other upload. |
 | **Size limit** | Slider, shown only for *Files above the size limit*. Default 9 MB, drag to 0 for no limit. |
 | **Chunked uploads above (MB)** | Big files are uploaded in resumable pieces from this size up. 32 MB is a good default. |
 
@@ -166,8 +167,8 @@ Blocked extensions configured on the instance (`exe`, `bat`, `cmd`, `com`, `scr`
 
 ## Troubleshooting
 
-- **Drag & drop does nothing**: enable **Debug logging** in the settings and watch the console. A successful interception logs `[Equi0807] upload event`. If nothing is logged, another plugin is claiming the drop first (check FileUpload/EquiMocha) or the plugin is disabled or blacklisted for that server.
-- **Dropped a small file and it went to 0807.st**: expected. Dropped files always upload, regardless of the size limit. Use *Only from the + menu* if you want drops left to Discord.
+- **Drag & drop does nothing**: enable **Debug logging** in the settings and watch the console. A successful interception logs `[Equi0807] upload event`. If nothing is logged, the plugin is disabled or blacklisted for that server.
+- **A small dropped file stays on Discord**: expected, drops follow the size limit. Turn on **Always upload dropped files** if you want every drop uploaded.
 - **A small file went to 0807.st instead of Discord**: check *When to upload* and the **Size limit** slider. A file of exactly the limit stays on Discord; `0` means every size is uploaded.
 - **The progress card sits on top of Discord's header or top bar**: this was an older build. Equi0807 no longer injects anything into Discord's React tree; the card is its own element floating above the message box. Rebuild (`pnpm build && pnpm inject`) and fully restart Discord.
 - **The plugin does not appear in the plugins list**: work through these in order:
@@ -182,7 +183,6 @@ Blocked extensions configured on the instance (`exe`, `bat`, `cmd`, `com`, `scr`
 - **`Too many uploads` / HTTP 429**: wait a few minutes before retrying.
 - **`Storage is full` / HTTP 507**: the instance has run out of space; try again later or use another instance.
 - **Uploads stop at 0%**: check the **Debug logging** setting and the console for the underlying error.
-- **"Equi0807: EquiMocha is also enabled" but it is not**: this warning only appears when the other plugin is installed and enabled in Equicord. Check **Settings → Plugins** for EquiMocha or FileUpload and disable it there. A plugin that was uninstalled no longer triggers the warning.
 
 ## Privacy
 

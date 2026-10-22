@@ -50,12 +50,12 @@ export function isAboveThreshold(size: number, thresholdBytes: number): boolean 
 /**
  * Whether a file should be uploaded to 0807.st.
  *
- * Dragged files are always uploaded in both automatic modes: dropping a file
- * is an explicit action, so the size limit does not apply to it.
+ * `ignoreThreshold` is only used for dropped files when the user asked for
+ * every drop to be uploaded. Otherwise the limit applies to every path.
  */
-export function shouldUploadFile(size: number, mode: UploadMode, thresholdBytes: number, isDrop: boolean): boolean {
+export function shouldUploadFile(size: number, mode: UploadMode, thresholdBytes: number, ignoreThreshold: boolean): boolean {
     if (mode === UploadMode.Manual) return false;
-    if (isDrop) return true;
+    if (ignoreThreshold) return true;
     if (mode === UploadMode.Everything) return true;
 
     return isAboveThreshold(size, thresholdBytes);
