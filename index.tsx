@@ -27,53 +27,150 @@ const SERVICE_LABEL = "0807.st";
 const STAGING_CHUNK_BYTES = 8 * 1024 * 1024;
 /** How recently a file drag must have happened for a dispatcher event to count as a drop. */
 const DROP_GRACE_MS = 2000;
+/** Window in which a file-picker or paste is considered the cause of an upload. */
+const INPUT_GRACE_MS = 2000;
+/**
+ * How long a file stays "already handled" by one of our two interception
+ * paths. Short on purpose: one user action produces at most a dispatcher event
+ * and a DOM drop, milliseconds apart, while a genuine retry takes longer.
+ */
+const HANDLED_FILE_TTL_MS = 2000;
+
+let lastFileDragAt = 0;
+let lastPickerAt = 0;
+let lastPasteAt = 0;
+
+/**
+ * Files already claimed by one of our handlers. Both the DOM drop path and the
+ * FluxDispatcher path claim their files, so a drop that reaches both is only
+ * ever uploaded once.
+ */
+const handledFiles = new Map<string, number>();
 
 function fileKey(file: File): string {
     return `${file.name}:${file.size}:${file.lastModified}`;
 }
 
-function claimDroppedFiles(files: readonly File[]) {
+function markFilesHandled(files: readonly File[]) {
     const now = Date.now();
 
-    for (const [key, at] of claimedDropFiles) {
-        if (now - at > CLAIMED_DROP_TTL_MS) claimedDropFiles.delete(key);
+    for (const [key, at] of handledFiles) {
+        if (now - at > HANDLED_FILE_TTL_MS) handledFiles.delete(key);
     }
 
-    for (const file of files) claimedDropFiles.set(fileKey(file), now);
+    for (const file of files) handledFiles.set(fileKey(file), now);
 }
 
-function isClaimedDropFile(file: File): boolean {
-    const at = claimedDropFiles.get(fileKey(file));
+function isFileHandled(file: File): boolean {
+    const at = handledFiles.get(fileKey(file));
 
     if (at === undefined) return false;
-    if (Date.now() - at > CLAIMED_DROP_TTL_MS) {
-        claimedDropFiles.delete(fileKey(file));
+    if (Date.now() - at > HANDLED_FILE_TTL_MS) {
+        handledFiles.delete(fileKey(file));
         return false;
     }
 
     return true;
 }
 
+function filterUnhandled(files: readonly File[]): File[] {
+    return files.filter(file => !isFileHandled(file));
+}
+
+/**
+ * Releases files from the handled set. Called when a second path reports the
+ * same files for the same action, so that dropping the very same file again
+ * later is not silently ignored.
+ */
+function forgetHandledFiles(files: readonly File[]) {
+    for (const file of files) handledFiles.delete(fileKey(file));
+}
+
 const Native = IS_DISCORD_DESKTOP
     ? VencordNative.pluginHelpers.Equi0807 as PluginNative<typeof import("./native")>
     : null;
 
+const ENDPOINT_PATTERN = /^https?:\/\/[^\s/]+/i;
+
 const settings = definePluginSettings({
+    // ---- connection -----------------------------------------------------
     baseUrl: {
         type: OptionType.STRING,
-        description: "0807 instance URL",
+        displayName: "Instance URL",
+        description: "The 0807 instance to upload to. Change this for a self-hosted instance",
         default: "https://0807.st",
-        placeholder: "https://0807.st"
+        placeholder: "https://0807.st",
+        isValid: (value: unknown) => ENDPOINT_PATTERN.test(String(value ?? "").trim()) || "Must start with http:// or https://"
     },
     partnerToken: {
         type: OptionType.STRING,
-        description: "Optional partner token. Skips proof-of-work, raises limits and enables server-side URL uploads",
+        displayName: "Partner token",
+        description: "Optional. Skips proof-of-work, raises size limits and enables URL uploads",
         default: "",
-        placeholder: "optional"
+        placeholder: "leave empty for anonymous uploads"
+    },
+
+    // ---- what gets uploaded ---------------------------------------------
+    bypassDiscordUpload: {
+        type: OptionType.BOOLEAN,
+        displayName: "Replace Discord uploads",
+        description: "Send attachments to 0807.st instead of Discord. Turn off to only use the right-click and + menu actions",
+        default: true
+    },
+    alwaysUploadDroppedFiles: {
+        type: OptionType.BOOLEAN,
+        displayName: "Always upload dropped files",
+        description: "Anything dragged into the chat goes to 0807.st, regardless of the size threshold",
+        default: true
+    },
+    autoUploadPastedFiles: {
+        type: OptionType.BOOLEAN,
+        displayName: "Upload pasted files",
+        description: "Send files pasted into the chat to 0807.st",
+        default: true
+    },
+    onlyOverNineMegabytes: {
+        type: OptionType.BOOLEAN,
+        displayName: "Use size threshold",
+        description: "Only upload files larger than the threshold below. Turn off to upload every file, any size",
+        default: true
+    },
+    uploadThresholdMB: {
+        type: OptionType.SLIDER,
+        displayName: "Size threshold",
+        description: "Files larger than this go to 0807.st instead of Discord. Drag to 0 to upload any size",
+        markers: THRESHOLD_MARKERS,
+        default: DEFAULT_THRESHOLD_MB,
+        stickToMarkers: false,
+        disabled: () => !settings.store.onlyOverNineMegabytes,
+        componentProps: {
+            onValueRender: formatThreshold
+        }
+    },
+    chunkedThresholdMB: {
+        type: OptionType.NUMBER,
+        displayName: "Chunked upload threshold",
+        description: "Files larger than this (MB) use resumable chunked uploads. Lower it if you see proof-of-work expiring",
+        default: 32,
+        isValid: value => {
+            const mb = Number(value);
+            if (!Number.isFinite(mb) || mb < 1 || mb > 128) return "Must be between 1 and 128 MB";
+
+            return true;
+        }
+    },
+
+    // ---- the links you get back ------------------------------------------
+    autoSend: {
+        type: OptionType.BOOLEAN,
+        displayName: "Send link automatically",
+        description: "Post the link in the current channel once the upload finishes",
+        default: true
     },
     shareExpiry: {
         type: OptionType.SELECT,
-        description: "Auto-delete uploaded files after",
+        displayName: "Auto-delete after",
+        description: "How long 0807.st keeps the file",
         default: "0",
         options: [
             { label: "Never", value: "0" },
@@ -85,73 +182,42 @@ const settings = definePluginSettings({
     },
     maxDownloads: {
         type: OptionType.NUMBER,
-        description: "Self-destruct after this many downloads (0 = unlimited)",
-        default: 0
+        displayName: "Max downloads",
+        description: "Delete the file after this many downloads. 0 means unlimited",
+        default: 0,
+        isValid: value => {
+            const count = Number(value);
+            if (!Number.isFinite(count) || count < 0) return "Must be 0 or a positive number";
+
+            return true;
+        }
     },
     password: {
         type: OptionType.STRING,
-        description: "Optional password required to open uploaded files",
+        displayName: "File password",
+        description: "Optional password required to open the uploaded file",
         default: "",
-        placeholder: "optional"
-    },
-    autoSend: {
-        type: OptionType.BOOLEAN,
-        description: "Automatically send the uploaded link in the current channel",
-        default: true
+        placeholder: "no password"
     },
     copyDeletionUrl: {
         type: OptionType.BOOLEAN,
-        description: "After auto-sending, copy the deletion link to the clipboard. Keep it somewhere safe",
+        displayName: "Copy deletion link",
+        description: "Copy the deletion link to the clipboard after uploading. Keep it safe, it is the only way to delete the file",
         default: false
     },
-    autoUploadPastedFiles: {
-        type: OptionType.BOOLEAN,
-        description: "Upload pasted files to 0807.st",
-        default: true
-    },
-    bypassDiscordUpload: {
-        type: OptionType.BOOLEAN,
-        description: "Intercept Discord uploads and send them to 0807.st instead",
-        default: true
-    },
-    alwaysUploadDroppedFiles: {
-        type: OptionType.BOOLEAN,
-        displayName: "Always upload dropped files",
-        description: "Files dropped into Discord go to 0807.st no matter their size, ignoring the size threshold",
-        default: true
-    },
-    onlyOverNineMegabytes: {
-        type: OptionType.BOOLEAN,
-        displayName: "Only upload above the size threshold",
-        description: "When off, every file is uploaded to 0807.st, no matter how small",
-        default: true
-    },
-    uploadThresholdMB: {
-        type: OptionType.SLIDER,
-        displayName: "Size threshold",
-        description: "Files larger than this are uploaded to 0807.st instead of Discord. Drag to 0 to upload any size",
-        markers: THRESHOLD_MARKERS,
-        default: DEFAULT_THRESHOLD_MB,
-        stickToMarkers: false,
-        disabled: () => !settings.store.onlyOverNineMegabytes,
-        componentProps: {
-            onValueRender: formatThreshold
-        }
-    },
-    chunkedThresholdMB: {
-        type: OptionType.NUMBER,
-        description: "Files larger than this use resumable chunked uploads (1–128 MB). Lower it if proof-of-work expires",
-        default: 32
-    },
+
+    // ---- advanced --------------------------------------------------------
     blacklistedServers: {
         type: OptionType.STRING,
-        description: "Comma-separated server IDs where upload interception is disabled",
+        displayName: "Disabled servers",
+        description: "Comma-separated server IDs where uploads are left to Discord",
         default: "",
         placeholder: "123456789, 987654321"
     },
     debug: {
         type: OptionType.BOOLEAN,
-        description: "Log upload details to the console",
+        displayName: "Debug logging",
+        description: "Log intercepted uploads and their decisions to the console",
         default: false
     }
 });
@@ -204,13 +270,10 @@ let cancelRequested = false;
 let activeUploadKey: string | null = null;
 let uploadState: UploadState = { ...defaultUploadState };
 let uploadAddFilesInterceptor: ((event: unknown) => void) | null = null;
-let lastFileDragAt = 0;
-/** Files handled by the drop listener, so the dispatcher fallback skips them. */
-const claimedDropFiles = new Map<string, number>();
-const CLAIMED_DROP_TTL_MS = 5000;
 let pasteEventListener: ((event: ClipboardEvent) => void) | null = null;
 let dragOverEventListener: ((event: DragEvent) => void) | null = null;
 let dropEventListener: ((event: DragEvent) => void) | null = null;
+let fileInputChangeEventListener: ((event: Event) => void) | null = null;
 
 const uploadStateListeners = new Set<() => void>();
 
@@ -272,12 +335,28 @@ function isServerBlacklisted(): boolean {
         .includes(guildId);
 }
 
-function isAnotherUploaderEnabled(): boolean {
+function getOtherUploader(): string | null {
     try {
-        return isPluginEnabled("FileUpload") || isPluginEnabled("EquiMocha");
-    } catch {
-        return false;
-    }
+        if (isPluginEnabled("EquiMocha")) return "EquiMocha";
+        if (isPluginEnabled("FileUpload")) return "FileUpload";
+    } catch { }
+
+    return null;
+}
+
+let warnedAboutConflict = false;
+
+function warnAboutUploaderConflict() {
+    if (warnedAboutConflict) return;
+
+    const other = getOtherUploader();
+    if (!other) return;
+
+    warnedAboutConflict = true;
+    showToast({
+        text: `Equi0807: ${other} is also enabled. Disable one of them if uploads go to the wrong place.`,
+        variant: "critical"
+    });
 }
 
 function isUploadCancelledError(error: unknown): boolean {
@@ -398,8 +477,25 @@ function canInterceptUploads(): boolean {
     return Boolean(Native)
         && isConfigured()
         && Boolean(settings.store.bypassDiscordUpload)
-        && !isServerBlacklisted()
-        && !isAnotherUploaderEnabled();
+        && !isServerBlacklisted();
+}
+
+type UploadSource = "drop" | "picker" | "paste" | "unknown";
+
+/*
+ * Works out what caused an upload action. This must not depend on our own DOM
+ * listeners firing: Discord may stop propagation before they run, in which
+ * case an upload looks "unknown" and is treated like a drop (when dots are
+ * configured to always upload), instead of silently falling back to Discord.
+ */
+function describeUploadSource(): UploadSource {
+    const now = Date.now();
+
+    if (now - lastFileDragAt < DROP_GRACE_MS) return "drop";
+    if (now - lastPickerAt < INPUT_GRACE_MS) return "picker";
+    if (now - lastPasteAt < INPUT_GRACE_MS) return "paste";
+
+    return "unknown";
 }
 
 function shouldInterceptUploadFiles(files: readonly File[], ignoreThreshold = false): boolean {
@@ -692,15 +788,48 @@ function interceptUploadAddFiles(event: unknown) {
         ...extractFilesFromValue(payload.items)
     ]));
 
-    const fromDrop = Date.now() - lastFileDragAt < DROP_GRACE_MS;
-    const ignoreThreshold = fromDrop && Boolean(settings.store.alwaysUploadDroppedFiles);
-    const pending = files.filter(file => !isClaimedDropFile(file));
+    const source = describeUploadSource();
+    const alwaysDropped = Boolean(settings.store.alwaysUploadDroppedFiles);
+    const ignoreThreshold = alwaysDropped && (source === "drop" || source === "unknown");
+    const pending = filterUnhandled(files);
 
-    if (!pending.length || !shouldInterceptUploadFiles(pending, ignoreThreshold)) return;
+    debugLog("upload event", {
+        source,
+        draftType: payload.draftType,
+        files: files.map(file => `${file.name} (${file.size} bytes)`),
+        pending: pending.length,
+        ignoreThreshold,
+        canIntercept: canInterceptUploads()
+    });
+
+    if (!pending.length) {
+        debugLog("skipping: every file was already handled by the drop listener");
+
+        // Our drop listener already uploaded these. Make sure Discord does not
+        // keep them as attachments either, then release them so the same file
+        // can be dropped again later.
+        if (files.length) {
+            payload.files = [];
+            payload.uploads = [];
+            payload.items = [];
+            forgetHandledFiles(files);
+        }
+
+        return;
+    }
+
+    if (!shouldInterceptUploadFiles(pending, ignoreThreshold)) {
+        debugLog("skipping: below threshold or interception disabled");
+        return;
+    }
+
+    markFilesHandled(pending);
 
     payload.files = [];
     payload.uploads = [];
     payload.items = [];
+
+    warnAboutUploaderConflict();
 
     void uploadInputs(pending.map(fileToInput));
 }
@@ -711,13 +840,28 @@ function handlePaste(event: ClipboardEvent) {
     const files = Array.from(event.clipboardData?.files || []);
 
     if (!files.length) return;
+
+    lastPasteAt = Date.now();
+
     if (!settings.store.autoUploadPastedFiles) return;
     if (!shouldInterceptUploadFiles(files)) return;
 
     event.preventDefault();
     event.stopPropagation();
 
+    markFilesHandled(files);
+
     void uploadInputs(files.map(fileToInput));
+}
+
+// Discord's picker uses a real <input type="file">, so this tells picker
+// uploads apart from dropped ones and keeps the size threshold for the picker.
+function handleFileInputChange(event: Event) {
+    const { target } = event;
+
+    if (target instanceof HTMLInputElement && target.type === "file") {
+        lastPickerAt = Date.now();
+    }
 }
 
 // Dropped files always go to 0807.st, so a mere presence of files is enough.
@@ -774,19 +918,33 @@ function handleDrop(event: DragEvent) {
 
     lastFileDragAt = Date.now();
 
-    if (!shouldHandleDrop(files)) return;
+    // Discord's own listener normally runs first and dispatches the upload
+    // action; the interceptor then claims the files. Anything already claimed
+    // must not be uploaded a second time here.
+    const pending = filterUnhandled(files);
+
+    if (!pending.length) {
+        debugLog("drop already handled by the upload interceptor");
+
+        forgetHandledFiles(files);
+
+        if (takeFileEvent(event)) stopFileEvent(event);
+
+        return;
+    }
+
+    if (!shouldHandleDrop(pending)) return;
     if (!takeFileEvent(event)) return;
 
-    // Discord's own listener may already have queued these files before this
-    // handler runs. Claim them so the dispatcher fallback below does not
-    // upload the same files a second time.
-    claimDroppedFiles(files);
+    markFilesHandled(pending);
 
     stopFileEvent(event);
 
-    debugLog("dropped files", files.map(file => `${file.name} (${file.size} bytes)`));
+    warnAboutUploaderConflict();
 
-    void uploadInputs(files.map(fileToInput));
+    debugLog("dropped files", pending.map(file => `${file.name} (${file.size} bytes)`));
+
+    void uploadInputs(pending.map(fileToInput));
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1031,7 +1189,7 @@ export default definePlugin({
     name: "Equi0807",
     description: "Upload files to 0807.st and share short links.",
     tags: ["Media"],
-    authors: [{ name: "Equi0807", id: 0n }],
+    authors: [{ name: "TheMarch88", id: 511186459588427795n }],
     settings,
     patches: [
         // Forces an early return on the file size limit nitro upsell modal.
@@ -1068,6 +1226,10 @@ export default definePlugin({
         window.addEventListener("drop", dropEventListener, true);
         document.addEventListener("dragover", dragOverEventListener, true);
         document.addEventListener("drop", dropEventListener, true);
+
+        // tells picker uploads apart from dropped ones
+        fileInputChangeEventListener = event => handleFileInputChange(event);
+        document.addEventListener("change", fileInputChangeEventListener, true);
     },
     stop() {
         unmountProgressOverlay();
@@ -1095,11 +1257,15 @@ export default definePlugin({
             document.removeEventListener("drop", dropEventListener, true);
             dropEventListener = null;
         }
+
+        if (fileInputChangeEventListener) {
+            document.removeEventListener("change", fileInputChangeEventListener, true);
+            fileInputChangeEventListener = null;
+        }
     },
     shouldBypassDiscordUploadSizeCheck(): boolean {
         return Boolean(Native)
             && Boolean(settings.store.bypassDiscordUpload)
-            && !isServerBlacklisted()
-            && !isAnotherUploaderEnabled();
+            && !isServerBlacklisted();
     }
 });

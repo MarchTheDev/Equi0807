@@ -18,6 +18,8 @@ It is a fork/rewrite of [EquiMocha](https://github.com/nxllvxxd/EquiMocha), adap
 - Works with self-hosted 0807 instances
 - Per-server blacklist
 
+Made by **TheMarch88** (`511186459588427795`).
+
 ## Requirements
 
 - **Discord desktop** with Equicord. 0807.st does not send CORS headers for other origins, so uploads are performed by the native helper. Browser-only Equicord cannot upload.
@@ -101,23 +103,42 @@ git -C Equicord/src/plugins/Equi0807 branch --show-current
 
 ## Settings
 
+Settings are grouped the same way in the plugin modal.
+
+### Connection
+
 | Setting | Description |
 | --- | --- |
-| **0807 instance URL** | Base URL of the instance. Defaults to `https://0807.st`; change it for a self-hosted instance. |
-| **Partner token** | Optional. Skips proof-of-work, raises size limits, and uses 0807's server-side remote upload for URL uploads. |
-| **Auto-delete** | Never, 1 hour, 1 day, 7 days, or 30 days. |
-| **Max downloads** | Self-destruct after N downloads. `0` = unlimited. |
-| **Password** | Optional password required to open uploaded files. |
-| **Automatically send link** | Send the link in the current channel. When off, the link is copied to the clipboard. |
-| **Copy deletion link** | After auto-sending, copy the `deletion_url` to the clipboard. |
-| **Upload pasted files** | Intercept files pasted into the chat. |
-| **Intercept Discord uploads** | Send intercepted uploads to 0807.st. |
-| **Always upload dropped files** | When on (default), anything dragged into Discord is uploaded to 0807.st no matter its size. Turn it off to apply the size threshold to drops as well. |
-| **Only upload above the size threshold** | When on, files below the threshold stay on Discord. When off, every file goes to 0807.st regardless of size. |
-| **Size threshold** | Slider (0–100 MB, default 9 MB) that decides which files are uploaded to 0807.st. Anything larger than this value, including values between two markers, is intercepted. Drag to `0` to upload any size — the same as turning the toggle off. The slider is disabled while the toggle is off. |
-| **Chunked threshold** | Files larger than this (1–128 MB) use the resumable chunked API. Default `32 MB`. |
-| **Blacklisted servers** | Comma-separated guild IDs where interception is disabled. |
-| **Debug** | Log upload requests and responses to the console. |
+| **Instance URL** | The 0807 instance to upload to. Defaults to `https://0807.st`; change it for a self-hosted instance. Validated as a URL. |
+| **Partner token** | Optional. Skips proof-of-work, raises size limits, and enables server-side URL uploads. |
+
+### What gets uploaded
+
+| Setting | Description |
+| --- | --- |
+| **Replace Discord uploads** | Send attachments to 0807.st instead of Discord. Turn off to keep Discord uploads and only use the right-click / **+** menu actions. |
+| **Always upload dropped files** | Anything dragged into the chat goes to 0807.st, regardless of the size threshold. On by default. |
+| **Upload pasted files** | Send files pasted into the chat to 0807.st. |
+| **Use size threshold** | Only upload files larger than the threshold. Turn off to upload every file, any size. |
+| **Size threshold** | Slider from 0–100 MB (default 9 MB). Drag to `0` for "any size". Disabled while the toggle above is off. |
+| **Chunked upload threshold** | Files larger than this (1–128 MB, default 32 MB) use resumable chunked uploads. Lower it if proof-of-work expires. |
+
+### Links
+
+| Setting | Description |
+| --- | --- |
+| **Send link automatically** | Post the link in the current channel once the upload finishes. When off, the link is copied to the clipboard. |
+| **Auto-delete after** | Never, 1 hour, 1 day, 7 days, or 30 days. |
+| **Max downloads** | Delete the file after N downloads. `0` = unlimited. |
+| **File password** | Optional password required to open the uploaded file. |
+| **Copy deletion link** | Copy the `deletion_url` to the clipboard after uploading. Keep it safe — it is the only way to delete the file. |
+
+### Advanced
+
+| Setting | Description |
+| --- | --- |
+| **Disabled servers** | Comma-separated guild IDs where uploads are left to Discord. |
+| **Debug logging** | Log intercepted uploads and the decision taken to the console. |
 
 ## How it works
 
