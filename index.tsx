@@ -19,12 +19,14 @@ import definePlugin, { OptionType, PluginNative } from "@utils/types";
 import { findCssClassesLazy } from "@webpack";
 import { createRoot, DraftType, FluxDispatcher, Menu, PermissionsBits, PermissionStore, React, SelectedChannelStore, SelectedGuildStore, showToast, useEffect, useState } from "@webpack/common";
 
-import { computeThresholdBytes, DEFAULT_THRESHOLD_MB, formatThreshold, isAboveThreshold, THRESHOLD_MARKERS } from "./threshold";
+import { computeThresholdBytes, DEFAULT_THRESHOLD_MB, formatThreshold, shouldUploadFile, THRESHOLD_MARKERS } from "./threshold";
 import type { NativeChooseFileResult, NativeUploadProgress, NativeUploadResult, UploadOptions } from "./types";
 
 const cl = classNameFactory("vc-equi0807-");
 const SERVICE_LABEL = "0807.st";
 const STAGING_CHUNK_BYTES = 8 * 1024 * 1024;
+/** How recently a file drag must have happened for a dispatcher event to count as a drop. */
+const DROP_GRACE_MS = 2000;
 
 const Native = IS_DISCORD_DESKTOP
     ? VencordNative.pluginHelpers.Equi0807 as PluginNative<typeof import("./native")>
@@ -84,6 +86,12 @@ const settings = definePluginSettings({
     bypassDiscordUpload: {
         type: OptionType.BOOLEAN,
         description: "Intercept Discord uploads and send them to 0807.st instead",
+        default: true
+    },
+    alwaysUploadDroppedFiles: {
+        type: OptionType.BOOLEAN,
+        displayName: "Always upload dropped files",
+        description: "Files dropped into Discord go to 0807.st no matter their size, ignoring the size threshold",
         default: true
     },
     onlyOverNineMegabytes: {
@@ -170,6 +178,7 @@ let cancelRequested = false;
 let activeUploadKey: string | null = null;
 let uploadState: UploadState = { ...defaultUploadState };
 let uploadAddFilesInterceptor: ((event: unknown) => void) | null = null;
+let lastFileDragAt = 0;
 let pasteEventListener: ((event: ClipboardEvent) => void) | null = null;
 let dragOverEventListener: ((event: DragEvent) => void) | null = null;
 let dropEventListener: ((event: DragEvent) => void) | null = null;
@@ -356,17 +365,21 @@ function getUploadThresholdBytes(): number {
     return computeThresholdBytes(settings.store.onlyOverNineMegabytes, settings.store.uploadThresholdMB);
 }
 
-function shouldInterceptUploadFiles(files: readonly File[]): boolean {
-    if (!Native || !isConfigured()) return false;
-    if (!settings.store.bypassDiscordUpload) return false;
-    if (isServerBlacklisted()) return false;
-    if (isAnotherUploaderEnabled()) return false;
+function canInterceptUploads(): boolean {
+    return Boolean(Native)
+        && isConfigured()
+        && Boolean(settings.store.bypassDiscordUpload)
+        && !isServerBlacklisted()
+        && !isAnotherUploaderEnabled();
+}
+
+function shouldInterceptUploadFiles(files: readonly File[], ignoreThreshold = false): boolean {
     if (!files.length) return false;
+    if (!canInterceptUploads()) return false;
 
     const threshold = getUploadThresholdBytes();
 
-    // 0 = no threshold: every size goes to 0807.st
-    return files.some(file => isAboveThreshold(file.size, threshold));
+    return files.some(file => shouldUploadFile(file.size, threshold, ignoreThreshold));
 }
 
 function isArrayLikeFileContainer(value: unknown): value is { length: number;[index: number]: unknown; } {
@@ -411,6 +424,14 @@ function extractFilesFromValue(value: unknown, seen = new Set<unknown>()): File[
         entry.originalFile,
         entry.platformFile
     ].flatMap(candidate => extractFilesFromValue(candidate, seen));
+}
+
+// During dragover the browser exposes no File objects yet, only the "Files" type.
+function dataTransferHasFiles(dataTransfer: DataTransfer | null): boolean {
+    if (!dataTransfer) return false;
+    if (dataTransfer.files && dataTransfer.files.length > 0) return true;
+
+    return Array.from(dataTransfer.types || []).includes("Files");
 }
 
 function getFilesFromDataTransfer(dataTransfer: DataTransfer | null): File[] {
@@ -642,7 +663,10 @@ function interceptUploadAddFiles(event: unknown) {
         ...extractFilesFromValue(payload.items)
     ]));
 
-    if (!files.length || !shouldInterceptUploadFiles(files)) return;
+    const fromDrop = Date.now() - lastFileDragAt < DROP_GRACE_MS;
+    const ignoreThreshold = fromDrop && Boolean(settings.store.alwaysUploadDroppedFiles);
+
+    if (!files.length || !shouldInterceptUploadFiles(files, ignoreThreshold)) return;
 
     payload.files = [];
     payload.uploads = [];
@@ -666,24 +690,47 @@ function handlePaste(event: ClipboardEvent) {
     void uploadInputs(files.map(fileToInput));
 }
 
+// Dropped files always go to 0807.st, so a mere presence of files is enough.
+function shouldHandleDrop(files: readonly File[]): boolean {
+    return shouldInterceptUploadFiles(files, Boolean(settings.store.alwaysUploadDroppedFiles));
+}
+
 function handleDragOver(event: DragEvent) {
+    if (!dataTransferHasFiles(event.dataTransfer)) return;
+
+    // Discord may handle the drag itself. Remember that a file drag is in
+    // progress so the FluxDispatcher interceptor can recognise dropped files.
+    lastFileDragAt = Date.now();
+
+    // Sizes are not available yet while dragging, so only check the master
+    // switches when every drop is supposed to be uploaded.
+    if (settings.store.alwaysUploadDroppedFiles) {
+        if (!canInterceptUploads()) return;
+    } else if (!shouldInterceptUploadFiles(getFilesFromDataTransfer(event.dataTransfer))) {
+        return;
+    }
+
+    // Only opt into the drop if nobody else claimed this drag already.
     if (event.defaultPrevented) return;
 
-    const files = getFilesFromDataTransfer(event.dataTransfer);
-
-    if (!files.length || !shouldInterceptUploadFiles(files)) return;
-
-    stopFileEvent(event);
+    event.preventDefault();
 
     if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
 }
 
 function handleDrop(event: DragEvent) {
-    if (event.defaultPrevented) return;
-
     const files = getFilesFromDataTransfer(event.dataTransfer);
 
-    if (!files.length || !shouldInterceptUploadFiles(files)) return;
+    if (!files.length) return;
+
+    lastFileDragAt = Date.now();
+
+    if (!shouldHandleDrop(files)) return;
+
+    // If another handler already claimed this drop (Discord's own window
+    // listener tends to run first), let it dispatch and pick the files up in
+    // the FluxDispatcher interceptor instead of uploading twice.
+    if (event.defaultPrevented) return;
 
     stopFileEvent(event);
 
@@ -962,8 +1009,9 @@ export default definePlugin({
 
         dragOverEventListener = event => handleDragOver(event);
         dropEventListener = event => handleDrop(event);
-        document.addEventListener("dragover", dragOverEventListener, true);
-        document.addEventListener("drop", dropEventListener, true);
+        // window capture runs before Discord's own drag handlers
+        window.addEventListener("dragover", dragOverEventListener, true);
+        window.addEventListener("drop", dropEventListener, true);
     },
     stop() {
         unmountProgressOverlay();
@@ -981,12 +1029,12 @@ export default definePlugin({
         }
 
         if (dragOverEventListener) {
-            document.removeEventListener("dragover", dragOverEventListener, true);
+            window.removeEventListener("dragover", dragOverEventListener, true);
             dragOverEventListener = null;
         }
 
         if (dropEventListener) {
-            document.removeEventListener("drop", dropEventListener, true);
+            window.removeEventListener("drop", dropEventListener, true);
             dropEventListener = null;
         }
     },

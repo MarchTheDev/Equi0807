@@ -32,6 +32,14 @@ export function isAboveThreshold(size: number, thresholdBytes: number): boolean 
     return thresholdBytes <= 0 || size > thresholdBytes;
 }
 
+/**
+ * Whether a file should be uploaded to 0807.st.
+ * `ignoreThreshold` is used for drag & drop, which always uploads when enabled.
+ */
+export function shouldUploadFile(size: number, thresholdBytes: number, ignoreThreshold: boolean): boolean {
+    return ignoreThreshold || isAboveThreshold(size, thresholdBytes);
+}
+
 /** Label shown next to the slider. */
 export function formatThreshold(megabytes: number): string {
     if (!Number.isFinite(megabytes) || megabytes <= 0) return "Any size";

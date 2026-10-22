@@ -8,6 +8,7 @@ It is a fork/rewrite of [EquiMocha](https://github.com/nxllvxxd/EquiMocha), adap
 
 - Intercepts file uploads above a **configurable size threshold** (default 9 MB, slider from 0–100 MB) and sends them to 0807.st instead
 - Works with drag & drop, paste, the attachment **+** menu, and right-click menus
+- **Dropped files always go to 0807.st**, regardless of the size threshold (configurable)
 - Floating progress card with a cancel button, anchored above the message box
 - Resumable **chunked uploads** for large files, with per-chunk retries
 - Automatic **proof-of-work** for anonymous uploads — no account needed
@@ -111,6 +112,7 @@ git -C Equicord/src/plugins/Equi0807 branch --show-current
 | **Copy deletion link** | After auto-sending, copy the `deletion_url` to the clipboard. |
 | **Upload pasted files** | Intercept files pasted into the chat. |
 | **Intercept Discord uploads** | Send intercepted uploads to 0807.st. |
+| **Always upload dropped files** | When on (default), anything dragged into Discord is uploaded to 0807.st no matter its size. Turn it off to apply the size threshold to drops as well. |
 | **Only upload above the size threshold** | When on, files below the threshold stay on Discord. When off, every file goes to 0807.st regardless of size. |
 | **Size threshold** | Slider (0–100 MB, default 9 MB) that decides which files are uploaded to 0807.st. Anything larger than this value, including values between two markers, is intercepted. Drag to `0` to upload any size — the same as turning the toggle off. The slider is disabled while the toggle is off. |
 | **Chunked threshold** | Files larger than this (1–128 MB) use the resumable chunked API. Default `32 MB`. |
@@ -135,6 +137,7 @@ Blocked extensions configured on the instance (`exe`, `bat`, `cmd`, `com`, `scr`
 
 ## Troubleshooting
 
+- **Dropped a small file and it went to 0807.st** — expected: **Always upload dropped files** is on by default. Turn it off to make drops respect the size threshold like the attachment button does.
 - **A small file went to 0807.st instead of Discord** — check the **Size threshold** slider. It is compared with "greater than", so a file of exactly the threshold size stays on Discord, and `0` means every size is uploaded.
 - **The progress card sits on top of Discord's header / top bar** — this was an older build. Equi0807 no longer injects anything into Discord's React tree; the card is its own element floating above the message box. Rebuild (`pnpm build && pnpm inject`) and fully restart Discord.
 - **The plugin does not appear in the plugins list** — work through these in order:
