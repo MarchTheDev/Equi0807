@@ -7,30 +7,39 @@
 }
 
 .vc-equi0807-progress-wrap {
+    --equi0807-surface-base: #2b2d31;
+
     pointer-events: auto;
     width: 100%;
     border-radius: 10px;
-    border: 1px solid var(--border-subtle, rgb(255 255 255 / 12%));
+    border: 1px solid var(--border-subtle, var(--background-modifier-accent, rgb(255 255 255 / 12%)));
     padding: 10px 12px;
     display: flex;
     flex-direction: column;
     gap: 6px;
+    color: var(--text-normal, var(--text-default, #dbdee1));
 
     /*
-     * --background-floating and --background-secondary no longer exist in
-     * current Discord builds; an invalid var() chain computes to transparent,
-     * which made this card see-through. Fall back to a real colour instead.
+     * Layer the theme's surface colour over an opaque base instead of using it
+     * as a plain background-color. The card therefore follows the theme (and
+     * custom themes that only define the older tokens), but can never become
+     * see-through if a theme's token carries transparency.
      */
-    background-color: var(--background-surface-high, #2b2d31);
-    box-shadow: var(--elevation-high, 0 8px 16px rgb(0 0 0 / 32%));
+    background-color: var(--equi0807-surface-base);
+    background-image: linear-gradient(
+        var(--background-surface-high, var(--background-secondary, transparent)),
+        var(--background-surface-high, var(--background-secondary, transparent))
+    );
+    box-shadow: var(--elevation-high, var(--shadow-high, 0 8px 16px rgb(0 0 0 / 32%)));
     animation: vc-equi0807-slide-in 160ms ease-out;
 }
 
-/* Light theme fallback when the theme does not define the surface token */
+/* Opaque base that matches the light theme; the theme colour is layered on top */
 .theme-light .vc-equi0807-progress-wrap {
-    background-color: var(--background-surface-high, #f2f3f5);
-    border-color: var(--border-subtle, rgb(0 0 0 / 12%));
-    box-shadow: var(--elevation-high, 0 8px 16px rgb(0 0 0 / 16%));
+    --equi0807-surface-base: #f2f3f5;
+
+    border-color: var(--border-subtle, var(--background-modifier-accent, rgb(0 0 0 / 12%)));
+    box-shadow: var(--elevation-high, var(--shadow-high, 0 8px 16px rgb(0 0 0 / 16%)));
 }
 
 /* Only animate movement, never opacity: the card must be readable immediately */
@@ -53,7 +62,7 @@
 
 .vc-equi0807-progress-label {
     font-size: 12px;
-    color: var(--text-default, #dbdee1);
+    color: inherit;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -77,7 +86,7 @@
 .vc-equi0807-progress-cancel {
     border: none;
     background: none;
-    color: var(--text-default, #dbdee1);
+    color: inherit;
     font-size: 14px;
     line-height: 1;
     padding: 0 2px;
@@ -101,7 +110,7 @@
 .vc-equi0807-progress-fill {
     height: 100%;
     border-radius: 999px;
-    background: var(--brand-500, #5865f2);
+    background: var(--brand-500, var(--brand-experiment, #5865f2));
     transition: width 200ms ease, background-color 200ms ease;
 }
 

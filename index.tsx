@@ -28,6 +28,32 @@ const STAGING_CHUNK_BYTES = 8 * 1024 * 1024;
 /** How recently a file drag must have happened for a dispatcher event to count as a drop. */
 const DROP_GRACE_MS = 2000;
 
+function fileKey(file: File): string {
+    return `${file.name}:${file.size}:${file.lastModified}`;
+}
+
+function claimDroppedFiles(files: readonly File[]) {
+    const now = Date.now();
+
+    for (const [key, at] of claimedDropFiles) {
+        if (now - at > CLAIMED_DROP_TTL_MS) claimedDropFiles.delete(key);
+    }
+
+    for (const file of files) claimedDropFiles.set(fileKey(file), now);
+}
+
+function isClaimedDropFile(file: File): boolean {
+    const at = claimedDropFiles.get(fileKey(file));
+
+    if (at === undefined) return false;
+    if (Date.now() - at > CLAIMED_DROP_TTL_MS) {
+        claimedDropFiles.delete(fileKey(file));
+        return false;
+    }
+
+    return true;
+}
+
 const Native = IS_DISCORD_DESKTOP
     ? VencordNative.pluginHelpers.Equi0807 as PluginNative<typeof import("./native")>
     : null;
@@ -179,6 +205,9 @@ let activeUploadKey: string | null = null;
 let uploadState: UploadState = { ...defaultUploadState };
 let uploadAddFilesInterceptor: ((event: unknown) => void) | null = null;
 let lastFileDragAt = 0;
+/** Files handled by the drop listener, so the dispatcher fallback skips them. */
+const claimedDropFiles = new Map<string, number>();
+const CLAIMED_DROP_TTL_MS = 5000;
 let pasteEventListener: ((event: ClipboardEvent) => void) | null = null;
 let dragOverEventListener: ((event: DragEvent) => void) | null = null;
 let dropEventListener: ((event: DragEvent) => void) | null = null;
@@ -665,14 +694,15 @@ function interceptUploadAddFiles(event: unknown) {
 
     const fromDrop = Date.now() - lastFileDragAt < DROP_GRACE_MS;
     const ignoreThreshold = fromDrop && Boolean(settings.store.alwaysUploadDroppedFiles);
+    const pending = files.filter(file => !isClaimedDropFile(file));
 
-    if (!files.length || !shouldInterceptUploadFiles(files, ignoreThreshold)) return;
+    if (!pending.length || !shouldInterceptUploadFiles(pending, ignoreThreshold)) return;
 
     payload.files = [];
     payload.uploads = [];
     payload.items = [];
 
-    void uploadInputs(files.map(fileToInput));
+    void uploadInputs(pending.map(fileToInput));
 }
 
 function handlePaste(event: ClipboardEvent) {
@@ -695,6 +725,26 @@ function shouldHandleDrop(files: readonly File[]): boolean {
     return shouldInterceptUploadFiles(files, Boolean(settings.store.alwaysUploadDroppedFiles));
 }
 
+/*
+ * Drag & drop notes (this is subtle, don't "clean it up"):
+ *
+ * Discord registers its own drag handlers on window and calls
+ * preventDefault() + stopPropagation() there. stopPropagation() prevents the
+ * event from ever reaching a document listener, so these handlers must be
+ * registered on window as well. It does not block other listeners on the very
+ * same target, which is why window capture still works even though Discord's
+ * listener ran first. For the same reason we must never bail out on
+ * event.defaultPrevented: Discord has always set it by the time we run.
+ */
+const handledFileEvents = new WeakSet<Event>();
+
+function takeFileEvent(event: Event): boolean {
+    if (handledFileEvents.has(event)) return false;
+
+    handledFileEvents.add(event);
+    return true;
+}
+
 function handleDragOver(event: DragEvent) {
     if (!dataTransferHasFiles(event.dataTransfer)) return;
 
@@ -710,10 +760,9 @@ function handleDragOver(event: DragEvent) {
         return;
     }
 
-    // Only opt into the drop if nobody else claimed this drag already.
-    if (event.defaultPrevented) return;
+    if (!takeFileEvent(event)) return;
 
-    event.preventDefault();
+    stopFileEvent(event);
 
     if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
 }
@@ -726,13 +775,16 @@ function handleDrop(event: DragEvent) {
     lastFileDragAt = Date.now();
 
     if (!shouldHandleDrop(files)) return;
+    if (!takeFileEvent(event)) return;
 
-    // If another handler already claimed this drop (Discord's own window
-    // listener tends to run first), let it dispatch and pick the files up in
-    // the FluxDispatcher interceptor instead of uploading twice.
-    if (event.defaultPrevented) return;
+    // Discord's own listener may already have queued these files before this
+    // handler runs. Claim them so the dispatcher fallback below does not
+    // upload the same files a second time.
+    claimDroppedFiles(files);
 
     stopFileEvent(event);
+
+    debugLog("dropped files", files.map(file => `${file.name} (${file.size} bytes)`));
 
     void uploadInputs(files.map(fileToInput));
 }
@@ -1009,9 +1061,13 @@ export default definePlugin({
 
         dragOverEventListener = event => handleDragOver(event);
         dropEventListener = event => handleDrop(event);
-        // window capture runs before Discord's own drag handlers
+        // window first: Discord stops propagation there, so a document-only
+        // listener never sees the event. document is kept as a second chance
+        // when the event does propagate; takeFileEvent stops double handling.
         window.addEventListener("dragover", dragOverEventListener, true);
         window.addEventListener("drop", dropEventListener, true);
+        document.addEventListener("dragover", dragOverEventListener, true);
+        document.addEventListener("drop", dropEventListener, true);
     },
     stop() {
         unmountProgressOverlay();
@@ -1030,11 +1086,13 @@ export default definePlugin({
 
         if (dragOverEventListener) {
             window.removeEventListener("dragover", dragOverEventListener, true);
+            document.removeEventListener("dragover", dragOverEventListener, true);
             dragOverEventListener = null;
         }
 
         if (dropEventListener) {
             window.removeEventListener("drop", dropEventListener, true);
+            document.removeEventListener("drop", dropEventListener, true);
             dropEventListener = null;
         }
     },

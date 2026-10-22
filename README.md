@@ -9,7 +9,7 @@ It is a fork/rewrite of [EquiMocha](https://github.com/nxllvxxd/EquiMocha), adap
 - Intercepts file uploads above a **configurable size threshold** (default 9 MB, slider from 0–100 MB) and sends them to 0807.st instead
 - Works with drag & drop, paste, the attachment **+** menu, and right-click menus
 - **Dropped files always go to 0807.st**, regardless of the size threshold (configurable)
-- Floating progress card with a cancel button, anchored above the message box
+- Theme-aware floating progress card with a cancel button, anchored above the message box
 - Resumable **chunked uploads** for large files, with per-chunk retries
 - Automatic **proof-of-work** for anonymous uploads — no account needed
 - Optional **partner token**: skips proof-of-work, raises limits, and enables server-side URL uploads
@@ -137,6 +137,7 @@ Blocked extensions configured on the instance (`exe`, `bat`, `cmd`, `com`, `scr`
 
 ## Troubleshooting
 
+- **Drag & drop does nothing** — enable **Debug** in the settings and watch the console: a successful interception logs `[Equi0807] dropped files […]`. If nothing is logged, another plugin is claiming the drop first (check FileUpload/EquiMocha) or the plugin is disabled/blacklisted for that server.
 - **Dropped a small file and it went to 0807.st** — expected: **Always upload dropped files** is on by default. Turn it off to make drops respect the size threshold like the attachment button does.
 - **A small file went to 0807.st instead of Discord** — check the **Size threshold** slider. It is compared with "greater than", so a file of exactly the threshold size stays on Discord, and `0` means every size is uploaded.
 - **The progress card sits on top of Discord's header / top bar** — this was an older build. Equi0807 no longer injects anything into Discord's React tree; the card is its own element floating above the message box. Rebuild (`pnpm build && pnpm inject`) and fully restart Discord.
